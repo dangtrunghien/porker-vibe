@@ -1,0 +1,12 @@
+{
+  "devstral-2": {
+    "model_name": "devstral-2",
+    "endpoint": "http://localhost:11434/api/generate",
+    "api_key": null
+  },
+  "deepseek-coder-v2": {
+    "model_name": "deepseek-coder-v2:latest",
+    "endpoint": "http://localhost:11434/api/generate",
+    "api_key": null
+  }
+}
