@@ -24,31 +24,7 @@ Screen {
     align: left middle;
 }
 
-#todo-area {
-    height: auto;
-    max-height: 10;
-    width: 100%;
-    background: $background;
-    margin: 0;
-    padding: 0;
-    overflow: hidden;
-    text-align: left;
-    margin-top: 0;
 
-    .tool-result-border {
-        display: none;
-    }
-
-    &.loading-active .tool-result-border {
-        display: block;
-    }
-
-    .tool-result-content {
-        max-height: 9;
-        overflow-y: auto;
-        scrollbar-visibility: hidden;
-    }
-}
 
 #bottom-app-container {
     height: auto;
@@ -622,34 +598,7 @@ StatusMessage {
     color: $text-muted;
 }
 
-.todo-empty {
-    height: auto;
-    color: $text-muted;
-}
 
-.todo-pending {
-    height: auto;
-    color: $foreground;
-}
-
-.todo-in_progress {
-    height: auto;
-    color: $warning;
-}
-
-.todo-completed {
-    height: auto;
-    color: $success;
-}
-
-.todo-cancelled {
-    height: auto;
-    color: $text-muted;
-}
-
-#todo-area .tool-result {
-    margin-left: 0;
-}
 
 .loading-widget {
     width: 100%;

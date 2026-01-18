@@ -107,6 +107,7 @@ class ParsedToolCall(BaseModel):
     tool_name: str
     raw_args: dict[str, Any]
     call_id: str = ""
+    json_decode_error: str | None = None
 
 
 class ResolvedToolCall(BaseModel):
@@ -195,14 +196,17 @@ class APIToolFormatHandler:
                 continue
             try:
                 args = json.loads(function_call.arguments or "{}")
-            except json.JSONDecodeError:
+                json_decode_error = None
+            except json.JSONDecodeError as e:
                 args = {}
+                json_decode_error = str(e)
 
             tool_calls.append(
                 ParsedToolCall(
                     tool_name=function_call.name or "",
                     raw_args=args,
                     call_id=tc.id or "",
+                    json_decode_error=json_decode_error,
                 )
             )
 
@@ -220,6 +224,15 @@ class APIToolFormatHandler:
         }
 
         for parsed_call in parsed.tool_calls:
+            if parsed_call.json_decode_error:
+                failed_calls.append(
+                    FailedToolCall(
+                        tool_name=parsed_call.tool_name,
+                        call_id=parsed_call.call_id,
+                        error=f"Malformed JSON arguments for tool '{parsed_call.tool_name}': {parsed_call.json_decode_error}",
+                    )
+                )
+                continue
             tool_class = active_tools.get(parsed_call.tool_name)
             if not tool_class:
                 failed_calls.append(

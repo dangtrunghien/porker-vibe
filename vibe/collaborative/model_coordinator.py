@@ -5,12 +5,17 @@ Handles communication and coordination between Devstral-2 and a local model via 
 Supports VIBE_LOCAL_MODEL environment variable for seamless configuration.
 """
 
+from __future__ import annotations
+
 from pathlib import Path
 import json
 import requests
 from datetime import datetime
+from logging import getLogger # Added import
 
-from .task_manager import TaskManager, TaskType, ModelRole, CollaborativeTask
+logger = getLogger(__name__) # Initialized logger
+
+from .task_manager import TaskManager, TaskType, ModelRole, CollaborativeTask, TaskStatus
 from .ollama_detector import (
     get_local_model_from_env,
     get_ollama_generate_endpoint,
@@ -57,7 +62,7 @@ class ModelCoordinator:
                             api_key=model_config.get('api_key')
                         )
             except (json.JSONDecodeError, KeyError) as e:
-                print(f"Warning: Could not load model config: {e}")
+                logger.warning("Could not load model config: %s", e)
                 self._create_default_config()
         else:
             self._create_default_config()
@@ -89,8 +94,11 @@ class ModelCoordinator:
         }
         
         # Save the configuration
-        with open(self.config_file, 'w') as f:
-            json.dump(default_config, f, indent=2)
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(default_config, f, indent=2)
+        except OSError as e:
+            logger.warning("Could not save default model config to %s: %s", self.config_file, e)
         
         # Load the configuration into memory
         for role_name, model_config in default_config.items():
@@ -120,8 +128,11 @@ class ModelCoordinator:
                 "api_key": model_config.api_key
             }
         
-        with open(self.config_file, 'w') as f:
-            json.dump(config_data, f, indent=2)
+        try:
+            with open(self.config_file, 'w') as f:
+                json.dump(config_data, f, indent=2)
+        except OSError as e:
+            logger.warning("Could not save model config to %s: %s", self.config_file, e)
     
     def query_model(self, role: ModelRole, prompt: str, context: dict | None = None) -> str:
         """Query a specific model with a prompt."""
@@ -163,39 +174,56 @@ class ModelCoordinator:
                 return response.json()["choices"][0]["message"]["content"]
                 
         except requests.RequestException as e:
-            print(f"Error querying {role.value} model: {e}")
+            logger.warning("Error querying %s model: %s", role.value, e)
             return f"Error: Could not query {role.value} model - {str(e)}"
     
-    def start_collaborative_session(self, project_description: str):
-        """Start a new collaborative development session."""
+    def start_collaborative_session(self, project_description: str) -> list[dict[str, Any]] | str:
+        """
+        Start a new collaborative development session by generating a plan.
+        Returns the generated plan as a parsed Python object.
+        """
         # Step 1: Create planning task for Devstral-2
-        self.task_manager.create_task(
+        planning_task_id = self.task_manager.create_task(
             task_type=TaskType.PLANNING,
             description=f"Create development plan for: {project_description}",
             priority=1
         )
         
-        # Step 2: Auto-assign tasks
+        # Step 2: Auto-assign tasks (specifically, the planning task)
         self.task_manager.auto_assign_tasks()
         
         # Step 3: Get the planning task
-        next_task = self.task_manager.get_next_task()
-        if not next_task:
-            return "No tasks available for execution."
+        next_task_result = self.task_manager.get_next_task()
+        if not next_task_result:
+            return "No planning tasks available for execution."
 
-        task_id, planning_task = next_task
+        task_id, planning_task = next_task_result
         
         # Step 4: Execute the planning task
         if planning_task.assigned_to == ModelRole.PLANNER:
-            plan = self._execute_planning_task(planning_task.description)
-            self.task_manager.complete_task(task_id)
+            plan_json_str = self._execute_planning_task(planning_task.description)
+            self.task_manager.complete_task(task_id) # Mark planning task as complete
             
-            # Step 5: Create implementation tasks based on the plan
-            self._create_implementation_tasks_from_plan(plan)
-            
-            return plan
+            try:
+                # Parse the plan JSON and return it
+                plan_data = json.loads(plan_json_str)
+                # Basic validation for plan structure
+                if not isinstance(plan_data, dict) or "tasks" not in plan_data or not isinstance(plan_data["tasks"], list):
+                    logger.warning("Generated plan does not have expected 'tasks' list. Returning raw JSON.")
+                    return plan_json_str
+                
+                # Check for "name" and "task_type" in each task, required for start_ralph_loop
+                for task in plan_data["tasks"]:
+                    if not isinstance(task, dict) or "name" not in task or "task_type" not in task:
+                        logger.warning("Generated plan task missing 'name' or 'task_type'. Returning raw JSON.")
+                        return plan_json_str
+
+                return plan_data["tasks"] # Return the list of tasks from the plan
+            except json.JSONDecodeError as e:
+                logger.warning("Error parsing plan JSON from planner: %s", e)
+                return plan_json_str # Return raw JSON if parsing fails
         
-        return "No tasks available for execution."
+        return "No planning tasks available for execution."
     
     def _execute_planning_task(self, task_description: str) -> str:
         """Execute a planning task using the planner model."""
@@ -273,7 +301,7 @@ Please provide the plan in JSON format with the following structure:
             self.task_manager.auto_assign_tasks()
             
         except json.JSONDecodeError as e:
-            print(f"Error parsing plan JSON: {e}")
+            logger.warning("Error parsing plan JSON: %s", e)
     
     def execute_next_task(self) -> tuple[str | None, str | None]:
         """Execute the next available task in the queue."""
@@ -283,20 +311,39 @@ Please provide the plan in JSON format with the following structure:
             return None, "No tasks available"
         
         task_id, task = task_result
+        task_output = None # Initialize task_output
         
-        if task.assigned_to == ModelRole.PLANNER:
-            # Planning/architecture/review task
-            result = self._execute_planner_task(task)
-        elif task.assigned_to == ModelRole.IMPLEMENTER:
-            # Implementation task
-            result = self._execute_implementer_task(task)
-        else:
-            return task_id, "Task not assigned to any model"
+        # Set task status to IN_PROGRESS
+        self.task_manager.tasks[task_id].status = TaskStatus.IN_PROGRESS
+        self.task_manager.tasks[task_id].updated_at = datetime.now()
+        self.task_manager._save_tasks() # Save updated status
         
-        # Mark task as completed
-        self.task_manager.complete_task(task_id)
-        
-        return task_id, result
+        try:
+            if task.assigned_to == ModelRole.PLANNER:
+                # Planning/architecture/review task
+                task_output = self._execute_planner_task(task)
+            elif task.assigned_to == ModelRole.IMPLEMENTER:
+                # Implementation task
+                task_output = self._execute_implementer_task(task)
+            else:
+                raise ValueError("Task not assigned to any model")
+            
+            # After model execution, perform verification
+            if self._verify_task_completion(task, task_output):
+                self.task_manager.complete_task(task_id)
+                return task_id, task_output
+            else:
+                self.task_manager.tasks[task_id].status = TaskStatus.DEBUGGING
+                self.task_manager.tasks[task_id].updated_at = datetime.now()
+                self.task_manager._save_tasks() # Save updated status
+                return task_id, f"Verification failed. Task set to DEBUGGING. Output: {task_output}"
+                
+        except Exception as e:
+            logger.error("Error executing task %s: %s", task_id, e)
+            self.task_manager.tasks[task_id].status = TaskStatus.DEBUGGING
+            self.task_manager.tasks[task_id].updated_at = datetime.now()
+            self.task_manager._save_tasks() # Save updated status
+            return task_id, f"Task execution failed. Set to DEBUGGING. Error: {e}"
     
     def _execute_planner_task(self, task: CollaborativeTask) -> str:
         """Execute a task assigned to the planner model."""
@@ -330,6 +377,16 @@ Priority: {task.priority}
             base_prompt += "\n\nPerform a thorough code review. Check for bugs, security issues, performance problems, and adherence to best practices."
         
         return base_prompt
+
+    def _verify_task_completion(self, task: CollaborativeTask, task_output: str) -> bool:
+        """
+        Verify if a task has been successfully completed.
+        This is a placeholder for actual verification logic (e.g., running tests, linting).
+        """
+        logger.info(f"Verifying task {task.task_id} of type {task.task_type.name}...")
+        # TODO: Implement actual verification logic based on task type
+        # For now, assume successful completion
+        return True
     
     def get_project_status(self) -> dict:
         """Get the current status of the collaborative project."""

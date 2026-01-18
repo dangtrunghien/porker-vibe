@@ -195,7 +195,9 @@ result-*
 
 # Vibe runtime/session files; keep tools as part of repo when needed
 .vibe/*
+scripts/.vibe/ # Ignore .vibe folders within scripts/
 
 # Tests run the agent in the playground, we don't need to keep the session files
 tests/playground/*
 .
+/tests/

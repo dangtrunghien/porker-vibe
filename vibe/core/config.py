@@ -280,7 +280,8 @@ class VibeConfig(BaseSettings):
     vim_keybindings: bool = False
     disable_welcome_banner_animation: bool = False
     displayed_workdir: str = ""
-    auto_compact_threshold: int = 200_000
+    auto_compact_threshold: float = 0.35
+    autocompact_enabled: bool = Field(default=False)
     context_warnings: bool = False
     instructions: str = ""
     workdir: Path | None = Field(default=None, exclude=True)
@@ -537,7 +538,12 @@ class VibeConfig(BaseSettings):
 
         agent_config_path = (AGENT_DIR.path / agent).with_suffix(".toml")
         try:
-            return tomllib.load(agent_config_path.open("rb"))
+            agent_config = tomllib.load(agent_config_path.open("rb"))
+            if "auto_compact_threshold" in agent_config and isinstance(
+                agent_config["auto_compact_threshold"], int
+            ):
+                agent_config["auto_compact_threshold"] /= 100
+            return agent_config
         except FileNotFoundError:
             raise ValueError(
                 f"Config '{agent}.toml' for agent not found in {AGENT_DIR.path}"

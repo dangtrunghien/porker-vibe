@@ -114,7 +114,7 @@ class TestACPNewSession:
         )
         assert session_response.modes.availableModes[3].name == "Accept Edits"
 
-    @pytest.mark.skip(reason="TODO: Fix this test")
+
     @pytest.mark.asyncio
     async def test_new_session_preserves_model_after_set_model(
         self, acp_agent: VibeAcpAgent

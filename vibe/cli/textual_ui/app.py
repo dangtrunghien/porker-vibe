@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+
 from enum import StrEnum, auto
+
 import subprocess
+
 import time
-from typing import Any, ClassVar, assert_never
+
+from typing import Any, ClassVar, assert_never, List, Dict
+
+import json # Added import
 
 from pydantic import BaseModel
+
 from textual.app import App, ComposeResult
+
 from textual.binding import Binding, BindingType
 from textual.containers import Horizontal, VerticalScroll
 from textual.events import AppBlur, AppFocus, MouseUp
@@ -59,6 +67,7 @@ from vibe.core.autocompletion.path_prompt_adapter import render_path_prompt
 from vibe.core.config import VibeConfig
 from vibe.core.modes import AgentMode, next_mode
 from vibe.core.paths.config_paths import HISTORY_FILE
+from vibe.core.plan_manager import PlanManager
 from vibe.core.tools.base import BaseToolConfig, ToolPermission
 from vibe.core.types import ApprovalResponse, LLMMessage, Role
 from vibe.core.utils import (
@@ -68,6 +77,7 @@ from vibe.core.utils import (
     logger,
 )
 from vibe.collaborative.vibe_integration import CollaborativeVibeIntegration
+from vibe.collaborative.task_manager import TaskType, TaskStatus, ModelRole # Import TaskType
 
 
 class BottomApp(StrEnum):
@@ -85,7 +95,7 @@ class VibeApp(App):  # noqa: PLR0904
         Binding("ctrl+d", "force_quit", "Quit", show=False, priority=True),
         Binding("escape", "interrupt", "Interrupt", show=False, priority=True),
         Binding("ctrl+o", "toggle_tool", "Toggle Tool", show=False),
-        Binding("ctrl+t", "toggle_todo", "Toggle Todo", show=False),
+
         Binding("shift+tab", "cycle_mode", "Cycle Mode", show=False, priority=True),
         Binding("shift+up", "scroll_chat_up", "Scroll Up", show=False, priority=True),
         Binding(
@@ -129,9 +139,10 @@ class VibeApp(App):  # noqa: PLR0904
         self._collaborative_integration = collaborative_integration
 
         self.history_file = HISTORY_FILE.path
+        self._plan_manager = PlanManager(config.effective_workdir)
 
         self._tools_collapsed = True
-        self._todos_collapsed = False
+
         self._current_streaming_message: AssistantMessage | None = None
         self._current_streaming_reasoning: ReasoningMessage | None = None
         self._version_update_notifier = version_update_notifier
@@ -168,7 +179,7 @@ class VibeApp(App):  # noqa: PLR0904
             yield Static(id="loading-area-content")
             yield ModeIndicator(mode=self._current_agent_mode)
 
-        yield Static(id="todo-area")
+
 
         with Static(id="bottom-app-container"):
             yield ChatInputContainer(
@@ -222,7 +233,7 @@ class VibeApp(App):  # noqa: PLR0904
         self.event_handler = EventHandler(
             mount_callback=self._mount_and_scroll,
             scroll_callback=self._scroll_to_bottom_deferred,
-            todo_area_callback=lambda: self.query_one("#todo-area"),
+
             get_tools_collapsed=lambda: self._tools_collapsed,
             get_todos_collapsed=lambda: self._todos_collapsed,
         )
@@ -315,21 +326,8 @@ class VibeApp(App):  # noqa: PLR0904
         if self._loading_widget and self._loading_widget.parent:
             await self._loading_widget.remove()
             self._loading_widget = None
-        self._hide_todo_area()
 
-    def _show_todo_area(self) -> None:
-        try:
-            todo_area = self.query_one("#todo-area")
-            todo_area.add_class("loading-active")
-        except Exception:
-            pass
 
-    def _hide_todo_area(self) -> None:
-        try:
-            todo_area = self.query_one("#todo-area")
-            todo_area.remove_class("loading-active")
-        except Exception:
-            pass
 
     def on_config_app_setting_changed(self, message: ConfigApp.SettingChanged) -> None:
         if message.key == "textual_theme":
@@ -453,12 +451,103 @@ class VibeApp(App):  # noqa: PLR0904
                 ErrorMessage(f"Command failed: {e}", collapsed=self._tools_collapsed)
             )
 
+    async def _initiate_planning_session(self, user_input: str) -> None:
+        if not self._collaborative_integration:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Collaborative mode not enabled. Cannot initiate planning session.",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        # Extract project description from user input
+        parts = user_input.split(maxsplit=1)
+        if len(parts) < 2:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Usage: /plan <project_description>",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        project_description = parts[1]
+        
+        await self._mount_and_scroll(UserCommandMessage(f"Generating plan for: {project_description}..."))
+        
+        planning_result = self._collaborative_integration.collaborative_agent.start_project(
+            project_name="Current Project",
+            project_description=project_description
+        )
+        
+        plan = planning_result.get("development_plan")
+        
+        if isinstance(plan, str): # Handle cases where plan parsing failed in model_coordinator
+             await self._mount_and_scroll(
+                ErrorMessage(
+                    f"Failed to generate a parseable plan. Raw plan: {plan}",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+             return
+        
+        if plan:
+            plan_message = (
+                f"**Generated Development Plan:**\n\n"
+                f"Project Name: {planning_result.get('project_name')}\n"
+                f"Status: {planning_result.get('status')}\n\n"
+                f"**Tasks:**\n"
+            )
+            for i, task in enumerate(plan):
+                plan_message += (
+                    f"  {i+1}. **Name**: {task.get('name', 'N/A')}\n"
+                    f"     **Type**: {task.get('task_type', 'N/A')}\n"
+                    f"     **Description**: {task.get('description', 'N/A')}\n"
+                    f"     **Priority**: {task.get('priority', 'N/A')}\n"
+                    f"     **Dependencies**: {', '.join(task.get('dependencies', [])) or 'None'}\n"
+                )
+            plan_message += "\nDo you approve this plan? (yes/no)"
+            
+            await self._mount_and_scroll(UserCommandMessage(plan_message))
+            
+            # This is a placeholder for user approval. In a real Textual UI,
+            # this would involve switching to an ApprovalApp or similar widget.
+            # For now, we'll prompt the user in the chat.
+            # The agent would then wait for a "yes" or "no" response.
+            # This part will require more advanced Textual UI interaction.
+            await self._mount_and_scroll(AssistantMessage("Please type 'yes' to approve or 'no' to reject the plan."))
+            
+            # This is where the interactive approval would happen.
+            # For now, I'll return, and assume the user's next input will be 'yes' or 'no'.
+            self._pending_plan_approval = plan # Store plan for later approval
+            self._pending_plan_description = project_description # Store description
+            return
+
     async def _handle_user_message(self, message: str) -> None:
         init_task = self._ensure_agent_init_task()
         pending_init = bool(init_task and not init_task.done())
         user_message = UserMessage(message, pending=pending_init)
 
         await self._mount_and_scroll(user_message)
+
+        # Check for plan approval response
+        if hasattr(self, '_pending_plan_approval') and self._pending_plan_approval:
+            if message.lower() == 'yes':
+                await self._mount_and_scroll(UserCommandMessage("Plan approved. Initiating Ralph loop..."))
+                result = self._collaborative_integration.start_ralph_loop(self._pending_plan_approval)
+                if result.get("status") == "Ralph loop initiated":
+                     await self._mount_and_scroll(UserCommandMessage(f"Ralph loop started successfully with {result.get('total_tasks')} tasks."))
+                else:
+                     await self._mount_and_scroll(ErrorMessage(f"Failed to start Ralph loop: {result.get('message', 'Unknown error')}"))
+                del self._pending_plan_approval
+                del self._pending_plan_description
+                return
+            elif message.lower() == 'no':
+                await self._mount_and_scroll(UserCommandMessage("Plan rejected. No Ralph loop initiated."))
+                del self._pending_plan_approval
+                del self._pending_plan_description
+                return
 
         self.run_worker(
             self._process_user_message_after_mount(
@@ -514,6 +603,7 @@ class VibeApp(App):  # noqa: PLR0904
         try:
             agent = Agent(
                 self.config,
+                plan_manager=self._plan_manager,
                 mode=self._current_agent_mode,
                 enable_streaming=self.enable_streaming,
                 collaborative_integration=self._collaborative_integration,
@@ -651,7 +741,7 @@ class VibeApp(App):  # noqa: PLR0904
         loading = LoadingWidget()
         self._loading_widget = loading
         await loading_area.mount(loading)
-        self._show_todo_area()
+
 
         try:
             rendered_prompt = render_path_prompt(
@@ -693,7 +783,7 @@ class VibeApp(App):  # noqa: PLR0904
             if self._loading_widget:
                 await self._loading_widget.remove()
             self._loading_widget = None
-            self._hide_todo_area()
+
             await self._finalize_current_streaming_message()
 
     async def _interrupt_agent(self) -> None:
@@ -731,7 +821,7 @@ class VibeApp(App):  # noqa: PLR0904
         loading_area = self.query_one("#loading-area-content")
         await loading_area.remove_children()
         self._loading_widget = None
-        self._hide_todo_area()
+
 
         await self._finalize_current_streaming_message()
         await self._mount_and_scroll(InterruptMessage())
@@ -743,26 +833,223 @@ class VibeApp(App):  # noqa: PLR0904
         await self._mount_and_scroll(UserCommandMessage(help_text))
 
     async def _show_status(self) -> None:
-        if self.agent is None:
+        self.post_message(
+            AssistantMessage(
+                f"[bold blue]Current Agent Status:[/bold blue]\n\n"
+                f"Mode: {self.agent.mode.name}\n"
+                f"Total Turns: {self.agent.stats.steps}\n"
+                f"Context Tokens: {self.agent.stats.context_tokens}\n"
+                f"Session Cost: ${self.agent.stats.session_cost:.4f}\n"
+                f"Autocompaction Enabled: {self.config.autocompact_enabled}\n"
+                f"Autocompaction Threshold: {self.config.auto_compact_threshold * 100:.0f}%\n"
+            )
+        )
+
+    async def _set_autocompact_limit(self, user_input: str) -> None:
+        parts = user_input.split(maxsplit=1)
+        if len(parts) < 2:
+            self.post_message(AssistantMessage("Usage: /autocompactlimit <percentage>"))
+            return
+
+        try:
+            percentage = float(parts[1])
+            if not (0 < percentage <= 100):
+                self.post_message(
+                    AssistantMessage("Percentage must be between 0 and 100.")
+                )
+                return
+            
+            self.config.auto_compact_threshold = percentage / 100
+            VibeConfig.save_updates({"auto_compact_threshold": self.config.auto_compact_threshold})
+            self.post_message(
+                AssistantMessage(
+                    f"Autocompaction limit set to {percentage:.0f}% of context size."
+                )
+            )
+        except ValueError:
+            self.post_message(AssistantMessage("Invalid percentage. Please enter a number."))
+
+    async def _toggle_autocompact(self) -> None:
+        self.config.autocompact_enabled = not self.config.autocompact_enabled
+        VibeConfig.save_updates({"autocompact_enabled": self.config.autocompact_enabled})
+        self.post_message(
+            AssistantMessage(
+                f"Autocompaction is now {'ENABLED' if self.config.autocompact_enabled else 'DISABLED'}."
+            )
+        )
+
+    async def _start_ralph_loop(self, user_input: str) -> None:
+        if not self._collaborative_integration:
             await self._mount_and_scroll(
                 ErrorMessage(
-                    "Agent not initialized yet. Send a message first.",
+                    "Collaborative mode not enabled. Cannot start Ralph loop.",
                     collapsed=self._tools_collapsed,
                 )
             )
             return
 
-        stats = self.agent.stats
-        status_text = f"""## Agent Statistics
+        parts = user_input.split(maxsplit=2) # e.g., "/ralph start {json_plan}"
+        if len(parts) < 3:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Usage: /ralph start <JSON_PLAN>",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        plan_str = parts[2]
+        try:
+            plan_data = json.loads(plan_str)
+            # Basic validation for plan structure
+            if not isinstance(plan_data, list):
+                raise ValueError("Plan must be a JSON list of tasks.")
+            for task in plan_data:
+                if not isinstance(task, dict) or "task_type" not in task or "description" not in task or "name" not in task:
+                    raise ValueError("Each task in the plan must be an object with 'name', 'task_type', and 'description'.")
+                # Validate task_type string against TaskType enum
+                if task["task_type"] not in [tt.name for tt in TaskType]:
+                    raise ValueError(f"Invalid TaskType: {task['task_type']}. Must be one of {[tt.name for tt in TaskType]}.")
 
-- **Steps**: {stats.steps:,}
-- **Session Prompt Tokens**: {stats.session_prompt_tokens:,}
-- **Session Completion Tokens**: {stats.session_completion_tokens:,}
-- **Session Total LLM Tokens**: {stats.session_total_llm_tokens:,}
-- **Last Turn Tokens**: {stats.last_turn_total_tokens:,}
-- **Cost**: ${stats.session_cost:.4f}
-"""
-        await self._mount_and_scroll(UserCommandMessage(status_text))
+        except json.JSONDecodeError as e:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    f"Invalid JSON plan: {e}",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        except ValueError as e:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    f"Invalid plan structure: {e}",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        result = self._collaborative_integration.start_ralph_loop(plan_data)
+        
+        if result.get("success", True): # Assume success if key not present
+            await self._mount_and_scroll(
+                UserCommandMessage(
+                    f"Ralph loop initiated with {result.get('total_tasks')} tasks. "
+                    f"Next steps: {result.get('next_steps')}"
+                )
+            )
+        else:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    f"Failed to start Ralph loop: {result.get('message', 'Unknown error')}",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+
+    async def _get_ralph_loop_status(self, user_input: str) -> None:
+        if not self._collaborative_integration:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Collaborative mode not enabled. Cannot get Ralph loop status.",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        status_result = self._collaborative_integration.get_ralph_loop_status()
+        
+        status_message = (
+            f"**Ralph Loop Status:**\n"
+            f"- Active: {status_result['loop_active']}\n"
+            f"- Total Tasks: {status_result['total_tasks']}\n"
+            f"- Completed: {status_result['completed_tasks']}\n"
+            f"- Pending: {status_result['pending_tasks']}\n"
+            f"- In Progress: {status_result['in_progress_tasks']}\n"
+            f"- Assigned: {status_result['assigned_tasks']}\n"
+            f"- Debugging: {status_result['debugging_tasks']}\n"
+            f"- Blocked: {status_result['blocked_tasks']}\n"
+            f"Next Steps: {status_result['next_steps']}"
+        )
+        
+        await self._mount_and_scroll(UserCommandMessage(status_message))
+
+    async def _execute_next_ralph_task(self, user_input: str) -> None:
+        if not self._collaborative_integration:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Collaborative mode not enabled. Cannot execute next Ralph task.",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        result = self._collaborative_integration.execute_next_ralph_task()
+        
+        if result.get("status") == "no_tasks":
+            await self._mount_and_scroll(
+                UserCommandMessage("No tasks available in the Ralph loop to execute.")
+            )
+        else:
+            await self._mount_and_scroll(
+                UserCommandMessage(
+                    f"Executed task '{result.get('task_id')}': {result.get('result')}\n"
+                    f"Current Project Status: {result.get('project_status')}"
+                )
+            )
+
+    async def _execute_all_ralph_tasks(self, user_input: str) -> None:
+        if not self._collaborative_integration:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Collaborative mode not enabled. Cannot execute all Ralph tasks.",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        await self._mount_and_scroll(UserCommandMessage("Executing all pending Ralph loop tasks..."))
+        
+        result = self._collaborative_integration.execute_all_ralph_tasks()
+        
+        if result.get("status") == "all_tasks_completed":
+            await self._mount_and_scroll(
+                UserCommandMessage(
+                    f"All {result.get('completed_tasks')} tasks in the Ralph loop completed.\n"
+                    f"Final Project Status: {result.get('final_status')}"
+                )
+            )
+        else:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    f"Error executing all Ralph tasks: {result.get('message', 'Unknown error')}",
+                    collapsed=self._tools_collapsed,
+                )
+                
+            )
+
+    async def _cancel_ralph_loop(self, user_input: str) -> None:
+        if not self._collaborative_integration:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    "Collaborative mode not enabled. Cannot cancel Ralph loop.",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+            return
+        
+        result = self._collaborative_integration.cancel_ralph_loop()
+        
+        if result.get("success"):
+            await self._mount_and_scroll(
+                UserCommandMessage("Ralph loop cancelled. All pending tasks cleared.")
+            )
+        else:
+            await self._mount_and_scroll(
+                ErrorMessage(
+                    f"Failed to cancel Ralph loop: {result.get('message', 'Unknown error')}",
+                    collapsed=self._tools_collapsed,
+                )
+            )
+
 
     async def _show_config(self) -> None:
         """Switch to the configuration app in the bottom panel."""
@@ -816,8 +1103,7 @@ class VibeApp(App):  # noqa: PLR0904
             await self._finalize_current_streaming_message()
             messages_area = self.query_one("#messages")
             await messages_area.remove_children()
-            todo_area = self.query_one("#todo-area")
-            await todo_area.remove_children()
+
 
             if self._context_progress and self.agent:
                 current_state = self._context_progress.tokens
@@ -1131,8 +1417,7 @@ class VibeApp(App):  # noqa: PLR0904
         self._tools_collapsed = not self._tools_collapsed
 
         for result in self.query(ToolResultMessage):
-            if result.tool_name != "todo":
-                await result.set_collapsed(self._tools_collapsed)
+            await result.set_collapsed(self._tools_collapsed)
 
         try:
             for error_msg in self.query(ErrorMessage):
@@ -1140,12 +1425,7 @@ class VibeApp(App):  # noqa: PLR0904
         except Exception:
             pass
 
-    async def action_toggle_todo(self) -> None:
-        self._todos_collapsed = not self._todos_collapsed
 
-        for result in self.query(ToolResultMessage):
-            if result.tool_name == "todo":
-                await result.set_collapsed(self._todos_collapsed)
 
     def action_cycle_mode(self) -> None:
         if self._current_bottom_app != BottomApp.Input:

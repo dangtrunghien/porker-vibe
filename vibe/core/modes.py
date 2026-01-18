@@ -55,7 +55,7 @@ class ModeConfig:
     config_overrides: dict[str, Any] = field(default_factory=dict)
 
 
-PLAN_MODE_TOOLS = ["grep", "read_file", "todo"]
+PLAN_MODE_TOOLS = ["grep", "read_file"]
 ACCEPT_EDITS_TOOLS = ["write_file", "search_replace"]
 
 MODE_CONFIGS: dict[AgentMode, ModeConfig] = {

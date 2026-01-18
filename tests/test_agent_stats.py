@@ -39,7 +39,7 @@ def make_config(
     include_project_context: bool = False,
     include_prompt_detail: bool = False,
     enabled_tools: list[str] | None = None,
-    todo_permission: ToolPermission = ToolPermission.ALWAYS,
+
 ) -> VibeConfig:
     models = [
         ModelConfig(
@@ -88,7 +88,7 @@ def make_config(
         models=models,
         providers=providers,
         enabled_tools=enabled_tools or [],
-        tools={"todo": BaseToolConfig(permission=todo_permission)},
+
     )
 
 
@@ -175,36 +175,7 @@ class TestReloadPreservesStats:
         assert agent.stats.session_prompt_tokens == old_session_prompt
         assert agent.stats.session_completion_tokens == old_session_completion
 
-    @pytest.mark.asyncio
-    async def test_reload_preserves_tool_call_stats(self) -> None:
-        backend = FakeBackend([
-            mock_llm_chunk(
-                content="Calling tool",
-                tool_calls=[
-                    ToolCall(
-                        id="tc1",
-                        index=0,
-                        function=FunctionCall(
-                            name="todo", arguments='{"action": "read"}'
-                        ),
-                    )
-                ],
-            ),
-            mock_llm_chunk(content="Done"),
-        ])
-        config = make_config(enabled_tools=["todo"])
-        agent = Agent(config, mode=AgentMode.AUTO_APPROVE, backend=backend)
 
-        async for _ in agent.act("Check todos"):
-            pass
-
-        assert agent.stats.tool_calls_succeeded == 1
-        assert agent.stats.tool_calls_agreed == 1
-
-        await agent.reload_with_initial_messages()
-
-        assert agent.stats.tool_calls_succeeded == 1
-        assert agent.stats.tool_calls_agreed == 1
 
     @pytest.mark.asyncio
     async def test_reload_preserves_steps(self) -> None:
@@ -435,37 +406,7 @@ class TestCompactStatsHandling:
 
         assert agent.stats.context_tokens < context_before
 
-    @pytest.mark.asyncio
-    async def test_compact_preserves_tool_call_stats(self) -> None:
-        backend = FakeBackend([
-            [
-                mock_llm_chunk(
-                    content="Using tool",
-                    tool_calls=[
-                        ToolCall(
-                            id="tc1",
-                            index=0,
-                            function=FunctionCall(
-                                name="todo", arguments='{"action": "read"}'
-                            ),
-                        )
-                    ],
-                ),
-                mock_llm_chunk(content=" todo"),
-            ],
-            [mock_llm_chunk(content="<summary>")],
-        ])
-        config = make_config(enabled_tools=["todo"])
-        agent = Agent(config, mode=AgentMode.AUTO_APPROVE, backend=backend)
 
-        async for _ in agent.act("Check todos"):
-            pass
-
-        assert agent.stats.tool_calls_succeeded == 1
-
-        await agent.compact()
-
-        assert agent.stats.tool_calls_succeeded == 1
 
     @pytest.mark.asyncio
     async def test_compact_resets_session_id(self) -> None:

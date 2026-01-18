@@ -15,8 +15,6 @@ from vibe.core.llm.backend.factory import BACKEND_FACTORY
 from vibe.core.llm.format import APIToolFormatHandler, ResolvedMessage
 from vibe.core.llm.types import BackendLike
 from vibe.core.middleware import (
-    AutoCompactMiddleware,
-    ContextWarningMiddleware,
     ConversationContext,
     MiddlewareAction,
     MiddlewarePipeline,
@@ -25,8 +23,13 @@ from vibe.core.middleware import (
     PriceLimitMiddleware,
     ResetReason,
     TurnLimitMiddleware,
+    AutoTaskTrackingMiddleware,
+    AutoCompactMiddleware,
+    LoopDetectionMiddleware,
 )
 from vibe.core.modes import AgentMode
+from vibe.core.plan_manager import PlanManager
+from vibe.core.planning_models import PlanItem
 from vibe.core.prompts import UtilityPrompt
 from vibe.core.skills.manager import SkillManager
 from vibe.core.system_prompt import get_universal_system_prompt
@@ -91,6 +94,7 @@ class Agent:
     def __init__(
         self,
         config: VibeConfig,
+        plan_manager: PlanManager,
         mode: AgentMode = AgentMode.DEFAULT,
         message_observer: Callable[[LLMMessage], None] | None = None,
         max_turns: int | None = None,
@@ -98,15 +102,16 @@ class Agent:
         backend: BackendLike | None = None,
         enable_streaming: bool = False,
         collaborative_integration: CollaborativeVibeIntegration | None = None,
-        todo_tool: object | None = None,  # Type hint will be added after circular import resolution
     ) -> None:
         """Initialize the agent with configuration and mode."""
         self.config = config
+        self.plan_manager = plan_manager
+        self.auto_task_tracking_middleware = AutoTaskTrackingMiddleware(plan_manager)
+        self._current_plan_item_id: Optional[UUID] = None
         self._mode = mode
         self._max_turns = max_turns
         self._max_price = max_price
         self.collaborative_integration = collaborative_integration
-        self._todo_tool = todo_tool
 
         self.tool_manager = ToolManager(lambda: self.config)
         self.skill_manager = SkillManager(lambda: self.config)
@@ -122,7 +127,7 @@ class Agent:
         self._setup_middleware()
 
         system_prompt = get_universal_system_prompt(
-            self.tool_manager, config, self.skill_manager
+            self.tool_manager, config, plan_manager=self.plan_manager, skill_manager=self.skill_manager
         )
         self.messages = [LLMMessage(role=Role.system, content=system_prompt)]
 
@@ -192,15 +197,6 @@ class Agent:
         if self._max_price is not None:
             self.middleware_pipeline.add(PriceLimitMiddleware(self._max_price))
 
-        if self.config.auto_compact_threshold > 0:
-            self.middleware_pipeline.add(
-                AutoCompactMiddleware(self.config.auto_compact_threshold)
-            )
-            if self.config.context_warnings:
-                self.middleware_pipeline.add(
-                    ContextWarningMiddleware(0.5, self.config.auto_compact_threshold)
-                )
-
         self.middleware_pipeline.add(PlanModeMiddleware(lambda: self._mode))
         
         # Add collaborative routing middleware if collaborative integration is available
@@ -208,11 +204,9 @@ class Agent:
             from vibe.core.middleware import CollaborativeRoutingMiddleware
             self.middleware_pipeline.add(CollaborativeRoutingMiddleware(self.collaborative_integration))
         
-        # Add auto-tracking middleware if todo tool is available
-        if self._todo_tool:
-            from vibe.core.tools.builtins.todo import AutoTaskTrackingMiddleware
-            auto_tracking_middleware = self._todo_tool.create_auto_tracking_middleware()
-            self.middleware_pipeline.add(auto_tracking_middleware)
+        self.middleware_pipeline.add(self.auto_task_tracking_middleware)
+        self.middleware_pipeline.add(AutoCompactMiddleware(lambda: self._mode))
+        self.middleware_pipeline.add(LoopDetectionMiddleware())
 
     async def _handle_middleware_result(
         self, result: MiddlewareResult
@@ -255,20 +249,27 @@ class Agent:
             case MiddlewareAction.CONTINUE:
                 pass
 
-    def _get_context(self) -> ConversationContext:
+    def _get_context(self, turn_start_message_index: int) -> ConversationContext:
         return ConversationContext(
-            messages=self.messages, stats=self.stats, config=self.config
+            messages=self.messages,
+            stats=self.stats,
+            config=self.config,
+            current_turn_messages=self.messages[turn_start_message_index:],
         )
 
     async def _conversation_loop(self, user_msg: str) -> AsyncGenerator[BaseEvent]:
-        self.messages.append(LLMMessage(role=Role.user, content=user_msg))
-        self.stats.steps += 1
+        self._clean_message_history()
 
+
+
+        
         try:
             should_break_loop = False
             while not should_break_loop:
+                turn_start_message_index = len(self.messages)
+
                 result = await self.middleware_pipeline.run_before_turn(
-                    self._get_context()
+                    self._get_context(turn_start_message_index)
                 )
                 async for event in self._handle_middleware_result(result):
                     yield event
@@ -276,6 +277,24 @@ class Agent:
                 if result.action == MiddlewareAction.STOP:
                     return
 
+                current_turn_message_content = user_msg # Start with the user's message
+                self._current_plan_item_id = None # Reset for each turn
+
+                next_item = self.plan_manager.get_next_actionable_item()
+                if next_item and next_item.status == ItemStatus.PENDING:
+                    self._current_plan_item_id = next_item.id
+                    self.plan_manager.update_item_status(next_item.id, ItemStatus.IN_PROGRESS)
+                    plan_instruction = (
+                        f"The current plan requires you to work on: {next_item.name} (ID: {next_item.id}). "
+                        f"Description: {next_item.description or 'No description provided.'}. "
+                        "Please perform this task. If it requires tools, use them. "
+                        "Once completed, report success. "
+                        "IMPORTANT: Focus solely on completing this plan item. "
+                        f"Your response to the original user message '{user_msg}' should be a brief acknowledgment that you are working on the plan item."
+                    )
+                    current_turn_message_content = plan_instruction # This becomes the user message for this turn
+
+                self.messages.append(LLMMessage(role=Role.user, content=current_turn_message_content))
                 self.stats.steps += 1
                 user_cancelled = False
                 async for event in self._perform_llm_turn():
@@ -292,7 +311,7 @@ class Agent:
                     return
 
                 after_result = await self.middleware_pipeline.run_after_turn(
-                    self._get_context()
+                    self._get_context(turn_start_message_index)
                 )
                 async for event in self._handle_middleware_result(after_result):
                     yield event
@@ -455,6 +474,11 @@ class Agent:
                 continue
 
             self.stats.tool_calls_agreed += 1
+            
+            if self._current_plan_item_id:
+                self.auto_task_tracking_middleware.register_tool_call_for_plan_item(
+                    tool_call_id, self._current_plan_item_id
+                )
 
             try:
                 start_time = time.perf_counter()
@@ -889,7 +913,7 @@ class Agent:
         self.skill_manager = SkillManager(lambda: self.config)
 
         new_system_prompt = get_universal_system_prompt(
-            self.tool_manager, self.config, self.skill_manager
+            self.tool_manager, self.config, plan_manager=self.plan_manager, skill_manager=self.skill_manager
         )
         self.messages = [LLMMessage(role=Role.system, content=new_system_prompt)]
 

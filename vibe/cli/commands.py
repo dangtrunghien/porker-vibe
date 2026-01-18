@@ -62,6 +62,46 @@ class CommandRegistry:
                 description="Display agent statistics",
                 handler="_show_status",
             ),
+            "autocompactlimit": Command(
+                aliases=frozenset(["/autocompactlimit"]),
+                description="Set the autocompaction context percentage threshold",
+                handler="_set_autocompact_limit",
+            ),
+            "toggleautocompact": Command(
+                aliases=frozenset(["/toggleautocompact"]),
+                description="Toggle automatic context compaction on or off",
+                handler="_toggle_autocompact",
+            ),
+            "ralph_start": Command(
+                aliases=frozenset(["/ralph start", "/ralph-start"]),
+                description="Initiate a new Ralph loop with a development plan",
+                handler="_start_ralph_loop",
+            ),
+            "ralph_status": Command(
+                aliases=frozenset(["/ralph status", "/ralph-status"]),
+                description="Get the current status of the active Ralph loop",
+                handler="_get_ralph_loop_status",
+            ),
+            "ralph_next": Command(
+                aliases=frozenset(["/ralph next", "/ralph-next"]),
+                description="Execute the next task in the active Ralph loop",
+                handler="_execute_next_ralph_task",
+            ),
+            "ralph_all": Command(
+                aliases=frozenset(["/ralph all", "/ralph-all"]),
+                description="Execute all pending tasks in the active Ralph loop",
+                handler="_execute_all_ralph_tasks",
+            ),
+            "ralph_cancel": Command(
+                aliases=frozenset(["/ralph cancel", "/ralph-cancel"]),
+                description="Cancel the active Ralph loop",
+                handler="_cancel_ralph_loop",
+            ),
+            "plan": Command(
+                aliases=frozenset(["/plan", "/generate plan"]),
+                description="Generate a development plan for a project and await approval to start a Ralph loop",
+                handler="_initiate_planning_session",
+            ),
         }
 
         for command in excluded_commands:
@@ -85,7 +125,7 @@ class CommandRegistry:
             "- `Escape` Interrupt agent or close dialogs",
             "- `Ctrl+C` Quit (or clear input if text present)",
             "- `Ctrl+O` Toggle tool output view",
-            "- `Ctrl+T` Toggle todo view",
+
             "- `Shift+Tab` Toggle auto-approve mode",
             "",
             "### Special Features",

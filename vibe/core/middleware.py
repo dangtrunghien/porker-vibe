@@ -1,19 +1,21 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum, auto
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import Any, Callable, Protocol, TYPE_CHECKING
+import json
+from collections import deque
+from uuid import UUID
 
 from vibe.core.modes import AgentMode
-from vibe.core.utils import VIBE_WARNING_TAG
+from vibe.core.utils import VIBE_WARNING_TAG, VIBE_STOP_EVENT_TAG
 
 if TYPE_CHECKING:
     from vibe.collaborative.vibe_integration import CollaborativeVibeIntegration
-
-if TYPE_CHECKING:
     from vibe.core.config import VibeConfig
-    from vibe.core.types import AgentStats, LLMMessage
+    from vibe.core.types import AgentStats, LLMMessage, Role
+    from vibe.core.plan_manager import PlanManager # To interact with the plan
+    from vibe.core.planning_models import ItemStatus, PlanItem # For statuses
 
 
 class MiddlewareAction(StrEnum):
@@ -33,6 +35,7 @@ class ConversationContext:
     messages: list[LLMMessage]
     stats: AgentStats
     config: VibeConfig
+    current_turn_messages: list[LLMMessage]
 
 
 @dataclass
@@ -49,6 +52,136 @@ class ConversationMiddleware(Protocol):
     async def after_turn(self, context: ConversationContext) -> MiddlewareResult: ...
 
     def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None: ...
+
+
+class LoopDetectionMiddleware:
+    """
+    Detects repetitive patterns in LLM responses and tool calls to prevent infinite loops.
+    """
+
+    # Configuration for loop detection
+    LOOP_WINDOW_SIZE = 5  # Number of past turns to consider for repetition
+    LOOP_REPETITION_THRESHOLD = 3  # Number of times a pattern must repeat to trigger a warning
+    MAX_CONSECUTIVE_LOOPS = 3  # Number of consecutive loop detections before stopping
+
+    def __init__(self) -> None:
+        self._recent_tool_calls: deque[str] = deque(maxlen=self.LOOP_WINDOW_SIZE)
+        self._recent_llm_responses: deque[str] = deque(maxlen=self.LOOP_WINDOW_SIZE)
+        self._consecutive_loop_detections = 0
+
+    async def before_turn(self, context: ConversationContext) -> MiddlewareResult:
+        return MiddlewareResult()
+
+    async def after_turn(self, context: ConversationContext) -> MiddlewareResult:
+        current_turn_llm_response = ""
+        current_turn_tool_calls = []
+
+        for message in context.current_turn_messages:
+            if message.role == Role.assistant and message.content:
+                current_turn_llm_response += message.content
+            if message.tool_calls:
+                for tc in message.tool_calls:
+                    # Store a consistent representation of the tool call
+                    args_str = json.dumps(tc.function.arguments) if tc.function and tc.function.arguments else "{}"
+                    current_turn_tool_calls.append(f"{tc.function.name}:{args_str}")
+
+        if current_turn_llm_response:
+            self._recent_llm_responses.append(current_turn_llm_response)
+        if current_turn_tool_calls:
+            # Join all tool calls of the turn into a single string for sequence detection
+            self._recent_tool_calls.append("|".join(current_turn_tool_calls))
+
+        loop_detected = False
+        loop_reason = ""
+
+        # Check for repetitive LLM responses
+        if len(self._recent_llm_responses) == self.LOOP_WINDOW_SIZE:
+            for i in range(self.LOOP_WINDOW_SIZE - self.LOOP_REPETITION_THRESHOLD):
+                pattern = list(self._recent_llm_responses)[i : i + self.LOOP_REPETITION_THRESHOLD]
+                remaining = list(self._recent_llm_responses)[i + self.LOOP_REPETITION_THRESHOLD :]
+                if len(pattern) > 0 and all(p == pattern[0] for p in pattern) and any(p == pattern[0] for p in remaining):
+                    loop_detected = True
+                    loop_reason = "repetitive LLM responses"
+                    break
+
+        # Check for repetitive tool calls (sequences)
+        if not loop_detected and len(self._recent_tool_calls) == self.LOOP_WINDOW_SIZE:
+            for i in range(self.LOOP_WINDOW_SIZE - self.LOOP_REPETITION_THRESHOLD):
+                pattern = list(self._recent_tool_calls)[i : i + self.LOOP_REPETITION_THRESHOLD]
+                remaining = list(self._recent_tool_calls)[i + self.LOOP_REPETITION_THRESHOLD :]
+                if len(pattern) > 0 and all(p == pattern[0] for p in pattern) and any(p == pattern[0] for p in remaining):
+                    loop_detected = True
+                    loop_reason = "repetitive tool calls"
+                    break
+
+        if loop_detected:
+            self._consecutive_loop_detections += 1
+            if self._consecutive_loop_detections >= self.MAX_CONSECUTIVE_LOOPS:
+                self._consecutive_loop_detections = 0  # Reset after stopping
+                return MiddlewareResult(
+                    action=MiddlewareAction.STOP,
+                    reason=f"Repeated loops detected ({loop_reason}). Agent stopped to prevent infinite execution.",
+                )
+            else:
+                return MiddlewareResult(
+                    action=MiddlewareAction.INJECT_MESSAGE,
+                    message=f"<{VIBE_WARNING_TAG}>Loop detected ({loop_reason})! Consider changing your strategy or providing new input. Consecutive detections: {self._consecutive_loop_detections}/{self.MAX_CONSECUTIVE_LOOPS}</{VIBE_WARNING_TAG}>",
+                )
+        else:
+            self._consecutive_loop_detections = 0  # Reset if no loop is detected
+
+        return MiddlewareResult()
+
+    def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None:
+        self._recent_tool_calls.clear()
+        self._recent_llm_responses.clear()
+        self._consecutive_loop_detections = 0
+
+
+
+class AutoTaskTrackingMiddleware:
+    """
+    Automatically tracks tasks and subtasks in the PlanManager based on tool execution.
+    """
+    def __init__(self, plan_manager: PlanManager):
+        self.plan_manager = plan_manager
+        # Map tool_call_id to PlanItem.id
+        self._current_tool_call_to_plan_item: dict[str, UUID] = {}
+
+    def register_tool_call_for_plan_item(self, tool_call_id: str, plan_item_id: UUID) -> None:
+        """Registers an association between a tool call and a plan item."""
+        self._current_tool_call_to_plan_item[tool_call_id] = plan_item_id
+
+    async def before_turn(self, context: ConversationContext) -> MiddlewareResult:
+        return MiddlewareResult()
+
+    async def after_turn(self, context: ConversationContext) -> MiddlewareResult:
+        # We need to look at the new messages added in this turn
+        # For simplicity for now, we'll iterate all messages, but ideally
+        # we'd only look at messages added since the last after_turn call.
+        # This will be handled implicitly by the Agent's message handling
+        # after tool execution.
+
+        for message in context.current_turn_messages:
+            if message.role == "tool" and message.tool_call_id:
+                tool_call_id = message.tool_call_id
+                plan_item_id = self._current_tool_call_to_plan_item.get(tool_call_id)
+
+                if plan_item_id:
+                    # Determine status based on tool result
+                    if message.content and VIBE_STOP_EVENT_TAG not in message.content: # Assuming no specific error tag yet
+                        # If tool result indicates success
+                        self.plan_manager.update_item_status(plan_item_id, ItemStatus.COMPLETED)
+                    else:
+                        # If tool result indicates failure or skipped
+                        self.plan_manager.update_item_status(plan_item_id, ItemStatus.FAILED)
+                    # Clear the mapping for this tool call after processing
+                    self._current_tool_call_to_plan_item.pop(tool_call_id, None)
+
+        return MiddlewareResult()
+
+    def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None:
+        self._current_tool_call_to_plan_item.clear()
 
 
 class TurnLimitMiddleware:
@@ -87,63 +220,6 @@ class PriceLimitMiddleware:
 
     def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None:
         pass
-
-
-class AutoCompactMiddleware:
-    def __init__(self, threshold: int) -> None:
-        self.threshold = threshold
-
-    async def before_turn(self, context: ConversationContext) -> MiddlewareResult:
-        if context.stats.context_tokens >= self.threshold:
-            return MiddlewareResult(
-                action=MiddlewareAction.COMPACT,
-                metadata={
-                    "old_tokens": context.stats.context_tokens,
-                    "threshold": self.threshold,
-                },
-            )
-        return MiddlewareResult()
-
-    async def after_turn(self, context: ConversationContext) -> MiddlewareResult:
-        return MiddlewareResult()
-
-    def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None:
-        pass
-
-
-class ContextWarningMiddleware:
-    def __init__(
-        self, threshold_percent: float = 0.5, max_context: int | None = None
-    ) -> None:
-        self.threshold_percent = threshold_percent
-        self.max_context = max_context
-        self.has_warned = False
-
-    async def before_turn(self, context: ConversationContext) -> MiddlewareResult:
-        if self.has_warned:
-            return MiddlewareResult()
-
-        max_context = self.max_context
-        if max_context is None:
-            return MiddlewareResult()
-
-        if context.stats.context_tokens >= max_context * self.threshold_percent:
-            self.has_warned = True
-
-            percentage_used = (context.stats.context_tokens / max_context) * 100
-            warning_msg = f"<{VIBE_WARNING_TAG}>You have used {percentage_used:.0f}% of your total context ({context.stats.context_tokens:,}/{max_context:,} tokens)</{VIBE_WARNING_TAG}>"
-
-            return MiddlewareResult(
-                action=MiddlewareAction.INJECT_MESSAGE, message=warning_msg
-            )
-
-        return MiddlewareResult()
-
-    async def after_turn(self, context: ConversationContext) -> MiddlewareResult:
-        return MiddlewareResult()
-
-    def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None:
-        self.has_warned = False
 
 
 PLAN_MODE_REMINDER = f"""<{VIBE_WARNING_TAG}>Plan mode is active. The user indicated that they do not want you to execute yet -- you MUST NOT make any edits, run any non-readonly tools (including changing configs or making commits), or otherwise make any changes to the system. This supersedes any other instructions you have received (for example, to make edits). Instead, you should:
@@ -273,6 +349,40 @@ class CollaborativeRoutingMiddleware:
         """Reset middleware state."""
         self.current_routing_task_id = None
         self.current_routing_result = None
+
+
+class AutoCompactMiddleware:
+    def __init__(self, mode_getter: Callable[[], AgentMode]) -> None:
+        self._mode_getter = mode_getter
+
+    async def before_turn(self, context: ConversationContext) -> MiddlewareResult:
+        # Autocompact only in DEFAULT mode, not in PLAN mode
+        if self._mode_getter() == AgentMode.PLAN:
+            return MiddlewareResult()
+
+        if (
+            context.config.autocompact_enabled
+            and context.stats.context_tokens > 0
+            and (
+                context.stats.context_tokens
+                / context.config.get_active_model().context_size
+            )
+            >= context.config.auto_compact_threshold
+        ):
+            return MiddlewareResult(
+                action=MiddlewareAction.COMPACT,
+                metadata={
+                    "old_tokens": context.stats.context_tokens,
+                    "threshold": context.config.auto_compact_threshold,
+                },
+            )
+        return MiddlewareResult()
+
+    async def after_turn(self, context: ConversationContext) -> MiddlewareResult:
+        return MiddlewareResult()
+
+    def reset(self, reset_reason: ResetReason = ResetReason.STOP) -> None:
+        pass
 
 
 class MiddlewarePipeline:

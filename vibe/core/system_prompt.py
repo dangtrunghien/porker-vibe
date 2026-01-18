@@ -9,6 +9,8 @@ import subprocess
 import sys
 import time
 from typing import TYPE_CHECKING
+from vibe.core.plan_manager import PlanManager
+from vibe.core.planning_models import ItemStatus
 
 from vibe.core.llm.format import get_active_tool_classes
 from vibe.core.paths.config_paths import INSTRUCTIONS_FILE
@@ -379,6 +381,41 @@ def _add_commit_signature() -> str:
     )
 
 
+
+def _get_plan_context(plan_manager: PlanManager) -> str:
+    if not plan_manager.current_plan:
+        return ""
+
+    plan = plan_manager.current_plan
+    lines = [
+        "## Current Agent Plan",
+        "",
+        f"**Overall Goal:** {plan.overall_goal}",
+        ""
+    ]
+
+    if plan.epics:
+        lines.append("**Epics:**")
+        for epic in plan.epics:
+            lines.append(f"- **{epic.name}** ({epic.status.value}): {epic.description}")
+
+    next_item = plan_manager.get_next_actionable_item()
+    if next_item:
+        lines.append(f"\n**Next Actionable Item:**")
+        lines.append(f"- **{next_item.name}** (ID: {next_item.id})")
+        lines.append(f"  Status: {next_item.status.value}")
+        if next_item.description:
+            lines.append(f"  Description: {next_item.description}")
+        if next_item.assigned_tool_name:
+            lines.append(f"  Assigned Tool: {next_item.assigned_tool_name}")
+        if next_item.expected_output:
+            lines.append(f"  Expected Output: {next_item.expected_output}")
+    else:
+        lines.append("\nNo immediate actionable items in the plan. Waiting for next instruction or plan update.")
+
+    return "\n".join(lines)
+
+
 def _get_available_skills_section(skill_manager: SkillManager | None) -> str:
     if skill_manager is None:
         return ""
@@ -413,6 +450,7 @@ def _get_available_skills_section(skill_manager: SkillManager | None) -> str:
 def get_universal_system_prompt(
     tool_manager: ToolManager,
     config: VibeConfig,
+    plan_manager: PlanManager,
     skill_manager: SkillManager | None = None,
 ) -> str:
     sections = [config.system_prompt]
@@ -444,6 +482,10 @@ def get_universal_system_prompt(
         skills_section = _get_available_skills_section(skill_manager)
         if skills_section:
             sections.append(skills_section)
+
+        plan_context_section = _get_plan_context(plan_manager)
+        if plan_context_section:
+            sections.append(plan_context_section)
 
     if config.include_project_context:
         is_dangerous, reason = is_dangerous_directory()

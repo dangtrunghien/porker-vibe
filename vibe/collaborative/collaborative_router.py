@@ -19,9 +19,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 import traceback
 import random
+from logging import getLogger # Added import
+import platform # Added import
 
-from vibe.collaborative.task_manager import TaskType, ModelRole
-from vibe.collaborative.ollama_detector import check_ollama_availability, OllamaStatus
+logger = getLogger(__name__) # Initialized logger
+
+from vibe.collaborative.task_manager import TaskType, ModelRole, CollaborativeTask
 from vibe.collaborative.model_coordinator import ModelCoordinator
 
 @dataclass
@@ -113,7 +116,7 @@ class CollaborativeRouter:
                         )
                         self.tasks[task_id] = task
             except (json.JSONDecodeError, KeyError) as e:
-                print(f"Warning: Could not load routing tasks: {e}")
+                logger.warning("Could not load routing tasks: %s", e)
     
     def _save_tasks(self):
         """Save tasks to persistent storage."""
@@ -139,11 +142,18 @@ class CollaborativeRouter:
                 'locked_by': task.locked_by
             }
         
-        with open(self.tasks_file, 'w') as f:
-            json.dump(task_data, f, indent=2)
+        try:
+            with open(self.tasks_file, 'w') as f:
+                json.dump(task_data, f, indent=2)
+        except OSError as e:
+            logger.warning("Could not save routing tasks to %s: %s", self.tasks_file, e)
     
     def _acquire_system_lock(self, timeout: float = 5.0) -> bool:
         """Acquire a system-wide lock to prevent multiple instances from overwhelming Ollama."""
+        if platform.system() not in ["Linux", "Darwin"]:
+            logger.warning("File locking (fcntl) is only supported on Linux and Darwin. Skipping lock acquisition.")
+            return True # Allow to proceed without locking on unsupported OS
+        
         try:
             # Open lock file and acquire exclusive lock
             lock_fd = open(self.lock_file, 'r+')
@@ -176,11 +186,14 @@ class CollaborativeRouter:
             return False
             
         except Exception as e:
-            print(f"Warning: Could not acquire system lock: {e}")
+            logger.warning("Could not acquire system lock: %s", e)
             return False
     
     def _release_system_lock(self):
         """Release the system lock."""
+        if platform.system() not in ["Linux", "Darwin"]:
+            return # No locking to release on unsupported OS
+        
         try:
             lock_fd = open(self.lock_file, 'r+')
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
@@ -192,7 +205,7 @@ class CollaborativeRouter:
             lock_fd.truncate()
             lock_fd.close()
         except Exception as e:
-            print(f"Warning: Could not release system lock: {e}")
+            logger.warning("Could not release system lock: %s", e)
     
     def _count_active_locks(self) -> int:
         """Count how many instances currently hold locks."""
@@ -200,7 +213,8 @@ class CollaborativeRouter:
             with open(self.lock_file, 'r') as f:
                 lines = f.readlines()
                 return len([line.strip() for line in lines if line.strip()])
-        except Exception:
+        except OSError as e:
+            logger.warning("Could not count active locks: %s", e)
             return 0
     
     def _detect_oom_error(self, error: str) -> bool:

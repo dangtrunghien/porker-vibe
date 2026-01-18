@@ -11,7 +11,9 @@ from pathlib import Path
 import json
 import uuid
 from datetime import datetime
+from logging import getLogger # Added import
 
+logger = getLogger(__name__) # Initialized logger
 
 class TaskType(Enum):
     """Types of tasks that can be assigned to models."""
@@ -25,6 +27,14 @@ class TaskType(Enum):
     MAINTENANCE = auto()
     REPOSITORY_HYGIENE = auto()
 
+class TaskStatus(Enum):
+    """Possible statuses for a collaborative task."""
+    PENDING = auto()
+    ASSIGNED = auto()
+    IN_PROGRESS = auto()
+    DEBUGGING = auto()
+    COMPLETED = auto()
+    BLOCKED = auto()
 
 class ModelRole(Enum):
     """Roles assigned to different models."""
@@ -39,7 +49,7 @@ class CollaborativeTask:
     task_type: TaskType
     description: str
     priority: int = 3  # 1-5 scale, 1 being highest
-    status: str = "pending"
+    status: TaskStatus = TaskStatus.PENDING
     assigned_to: ModelRole | None = None
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
@@ -74,19 +84,19 @@ class TaskManager:
                             task_type=TaskType[task_info['task_type']],
                             description=task_info['description'],
                             priority=task_info.get('priority', 3),
-                            status=task_info.get('status', 'pending'),
+                            status=TaskStatus[task_info['status']],
                             assigned_to=ModelRole(task_info['assigned_to']) if task_info.get('assigned_to') else None,
                             created_at=datetime.fromisoformat(task_info['created_at']),
                             updated_at=datetime.fromisoformat(task_info['updated_at']),
                             dependencies=task_info.get('dependencies', [])
                         )
                         self.tasks[task_id] = task
-                        if task.status == 'pending':
+                        if task.status == TaskStatus.PENDING:
                             self.task_queue.append(task_id)
                         elif task.status == 'completed':
                             self.completed_tasks.append(task_id)
             except (json.JSONDecodeError, KeyError) as e:
-                print(f"Warning: Could not load tasks: {e}")
+                logger.warning("Could not load tasks: %s", e) # Changed print to logger.warning
     
     def _save_tasks(self):
         """Save tasks to persistent storage."""
@@ -96,15 +106,18 @@ class TaskManager:
                 'task_type': task.task_type.name,
                 'description': task.description,
                 'priority': task.priority,
-                'status': task.status,
+                'status': task.status.name,
                 'assigned_to': task.assigned_to.value if task.assigned_to else None,
                 'created_at': task.created_at.isoformat(),
                 'updated_at': task.updated_at.isoformat(),
                 'dependencies': task.dependencies
             }
         
-        with open(self.task_history_file, 'w') as f:
-            json.dump(task_data, f, indent=2)
+        try: # Added try-except block
+            with open(self.task_history_file, 'w') as f:
+                json.dump(task_data, f, indent=2)
+        except OSError as e:
+            logger.warning("Could not save tasks to %s: %s", self.task_history_file, e) # Log error
     
     def create_task(
         self,
@@ -137,7 +150,7 @@ class TaskManager:
         
         task = self.tasks[task_id]
         task.assigned_to = model_role
-        task.status = "assigned"
+        task.status = TaskStatus.ASSIGNED
         task.updated_at = datetime.now()
         self._save_tasks()
     
@@ -147,7 +160,7 @@ class TaskManager:
             raise ValueError(f"Task {task_id} not found")
         
         task = self.tasks[task_id]
-        task.status = "completed"
+        task.status = TaskStatus.COMPLETED
         task.updated_at = datetime.now()
         
         if task_id in self.task_queue:
@@ -156,30 +169,49 @@ class TaskManager:
         self._save_tasks()
     
     def get_next_task(self) -> tuple[str, CollaborativeTask] | None:
-        """Get the next available task from the queue."""
+        """Get the next available task from the queue whose dependencies are met."""
         if not self.task_queue:
             return None
         
         # Sort by priority (lower numbers = higher priority)
         self.task_queue.sort(key=lambda tid: self.tasks[tid].priority)
         
-        task_id = self.task_queue[0]
-        return task_id, self.tasks[task_id]
+        for task_id in list(self.task_queue): # Iterate over a copy to allow modification
+            if self._is_task_blocked(task_id):
+                task = self.tasks[task_id]
+                if task.status != TaskStatus.BLOCKED: # Only update if status changed
+                    task.status = TaskStatus.BLOCKED
+                    task.updated_at = datetime.now()
+                    self._save_tasks()
+                continue
+            
+            # If not blocked, this is the next available task
+            return task_id, self.tasks[task_id]
+        
+        return None # No unblocked tasks found
+    
+    def _is_task_blocked(self, task_id: str) -> bool:
+        """Check if a task is blocked by uncompleted dependencies."""
+        task = self.tasks[task_id]
+        for dep_id in task.dependencies:
+            if dep_id not in self.tasks or self.tasks[dep_id].status != TaskStatus.COMPLETED:
+                return True
+        return False
+    
+    def get_task_status(self) -> dict[str, int]:
+        """Get summary of task statuses."""
+        status_counts = {status.name: 0 for status in TaskStatus}
+        
+        for task in self.tasks.values():
+            status_counts[task.status.name] += 1
+        
+        return status_counts
     
     def get_tasks_by_model(self, model_role: ModelRole) -> list[tuple[str, CollaborativeTask]]:
         """Get all tasks assigned to a specific model."""
         return [(tid, task) for tid, task in self.tasks.items() 
-                if task.assigned_to == model_role and task.status != "completed"]
-    
-    def get_task_status(self) -> dict[str, int]:
-        """Get summary of task statuses."""
-        status_counts = {'pending': 0, 'assigned': 0, 'completed': 0}
-        
-        for task in self.tasks.values():
-            status_counts[task.status] += 1
-        
-        return status_counts
-    
+                if task.assigned_to == model_role and task.status != TaskStatus.COMPLETED]
+
     def auto_assign_tasks(self):
         """Automatically assign tasks based on task type and model capabilities."""
         # Task type to model mapping
@@ -196,7 +228,7 @@ class TaskManager:
         }
         
         for task_id, task in self.tasks.items():
-            if task.status == "pending" and task_id in self.task_queue:
+            if task.status == TaskStatus.PENDING and task_id in self.task_queue:
                 assigned_role = task_assignment_rules.get(task.task_type)
                 if assigned_role:
                     self.assign_task(task_id, assigned_role)

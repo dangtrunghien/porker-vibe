@@ -13,6 +13,7 @@ Supports seamless integration via VIBE_LOCAL_MODEL environment variable:
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 import json
+import traceback # Added import
 
 from vibe.collaborative.collaborative_agent import CollaborativeAgent
 from vibe.collaborative.collaborative_router import CollaborativeRouter
@@ -530,7 +531,7 @@ The collaborative router will enforce this automatically.
                 "success": True,
                 "review": review
             }
-            
+        
         else:
             return {
                 "success": False,
@@ -554,3 +555,38 @@ The collaborative router will enforce this automatically.
             })
             
         return config
+
+    def start_ralph_loop(self, plan: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Initiate a Ralph loop with a given plan."""
+        if not self.collaborative_agent:
+            return {"success": False, "message": "Collaborative mode not enabled"}
+        return self.collaborative_agent.start_ralph_loop(plan)
+
+    def get_ralph_loop_status(self) -> Dict[str, Any]:
+        """Get the current status of the active Ralph loop."""
+        if not self.collaborative_agent:
+            return {"success": False, "message": "Collaborative mode not enabled"}
+        return self.collaborative_agent.get_ralph_loop_status()
+    
+    def execute_next_ralph_task(self) -> Dict[str, Any]:
+        """Execute the next task in the active Ralph loop."""
+        if not self.collaborative_agent:
+            return {"success": False, "message": "Collaborative mode not enabled"}
+        return self.collaborative_agent.execute_next_task()
+    
+    def execute_all_ralph_tasks(self) -> Dict[str, Any]:
+        """Execute all pending tasks in the active Ralph loop."""
+        if not self.collaborative_agent:
+            return {"success": False, "message": "Collaborative mode not enabled"}
+        return self.collaborative_agent.execute_all_tasks()
+
+    def cancel_ralph_loop(self) -> Dict[str, Any]:
+        """Cancel the active Ralph loop by clearing all tasks."""
+        if not self.collaborative_agent:
+            return {"success": False, "message": "Collaborative mode not enabled"}
+        # This will clear all pending and in-progress tasks
+        self.collaborative_agent.task_manager.tasks.clear()
+        self.collaborative_agent.task_manager.task_queue.clear()
+        self.collaborative_agent.task_manager.completed_tasks.clear()
+        self.collaborative_agent.task_manager._save_tasks()
+        return {"success": True, "message": "Ralph loop cancelled."}

@@ -214,8 +214,10 @@ class LLMMessage(BaseModel):
         for tool_calls in [self.tool_calls or [], other.tool_calls or []]:
             for tc in tool_calls:
                 if tc.index is None:
-                    raise ValueError("Tool call chunk missing index")
-                if tc.index not in tool_calls_map:
+                    # Assign a new unique index for unindexed tool calls
+                    new_index = len(tool_calls_map)
+                    tool_calls_map[new_index] = copy.deepcopy(tc)
+                elif tc.index not in tool_calls_map:
                     tool_calls_map[tc.index] = copy.deepcopy(tc)
                 else:
                     existing_name = tool_calls_map[tc.index].function.name

@@ -9,7 +9,7 @@ from textual.containers import Vertical
 from textual.widgets import Markdown, Static
 
 from vibe.cli.textual_ui.widgets.no_markup_static import NoMarkupStatic
-from vibe.cli.textual_ui.widgets.utils import DEFAULT_TOOL_SHORTCUT, TOOL_SHORTCUTS
+from vibe.cli.textual_ui.widgets.utils import DEFAULT_TOOL_SHORTCUT
 from vibe.core.tools.builtins.bash import BashArgs, BashResult
 from vibe.core.tools.builtins.grep import GrepArgs, GrepResult
 from vibe.core.tools.builtins.read_file import ReadFileArgs, ReadFileResult
@@ -18,7 +18,7 @@ from vibe.core.tools.builtins.search_replace import (
     SearchReplaceArgs,
     SearchReplaceResult,
 )
-from vibe.core.tools.builtins.todo import TodoArgs, TodoResult
+
 from vibe.core.tools.builtins.write_file import WriteFileArgs, WriteFileResult
 
 
@@ -214,57 +214,10 @@ class SearchReplaceResultWidget(ToolResultWidget[SearchReplaceResult]):
                 yield render_diff_line(line)
 
 
-class TodoApprovalWidget(ToolApprovalWidget[TodoArgs]):
-    def compose(self) -> ComposeResult:
-        yield NoMarkupStatic(
-            f"Action: {self.args.action}", classes="approval-description"
-        )
-        if self.args.todos:
-            yield NoMarkupStatic(
-                f"Todos: {len(self.args.todos)} items", classes="approval-description"
-            )
 
 
-class TodoResultWidget(ToolResultWidget[TodoResult]):
-    SHORTCUT = TOOL_SHORTCUTS["todo"]
 
-    def compose(self) -> ComposeResult:
-        if self.collapsed:
-            yield NoMarkupStatic(f"{self.message} {self._hint()}")
-        else:
-            yield NoMarkupStatic(f"{self.message} {self._hint()}")
-            yield NoMarkupStatic("")
 
-            if not self.result or not self.result.todos:
-                yield NoMarkupStatic("No todos", classes="todo-empty")
-                return
-
-            # Group todos by status
-            by_status: dict[str, list] = {
-                "in_progress": [],
-                "pending": [],
-                "completed": [],
-                "cancelled": [],
-            }
-            for todo in self.result.todos:
-                status = (
-                    todo.status.value
-                    if hasattr(todo.status, "value")
-                    else str(todo.status)
-                )
-                if status in by_status:
-                    by_status[status].append(todo)
-
-            for status in ["in_progress", "pending", "completed", "cancelled"]:
-                for todo in by_status[status]:
-                    icon = self._get_status_icon(status)
-                    yield NoMarkupStatic(
-                        f"{icon} {todo.content}", classes=f"todo-{status}"
-                    )
-
-    def _get_status_icon(self, status: str) -> str:
-        icons = {"pending": "☐", "in_progress": "☐", "completed": "☑", "cancelled": "☒"}
-        return icons.get(status, "☐")
 
 
 class ReadFileApprovalWidget(ToolApprovalWidget[ReadFileArgs]):
@@ -327,7 +280,7 @@ APPROVAL_WIDGETS: dict[str, type[ToolApprovalWidget]] = {
     "write_file": WriteFileApprovalWidget,
     "search_replace": SearchReplaceApprovalWidget,
     "grep": GrepApprovalWidget,
-    "todo": TodoApprovalWidget,
+
 }
 
 RESULT_WIDGETS: dict[str, type[ToolResultWidget]] = {
@@ -336,7 +289,7 @@ RESULT_WIDGETS: dict[str, type[ToolResultWidget]] = {
     "write_file": WriteFileResultWidget,
     "search_replace": SearchReplaceResultWidget,
     "grep": GrepResultWidget,
-    "todo": TodoResultWidget,
+
 }
 
 
