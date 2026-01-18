@@ -78,11 +78,46 @@ function install_uv() {
     fi
 }
 
-function install_vibe() {
-    info "Installing mistral-vibe from GitHub repository using uv..."
-    uv tool install mistral-vibe
+INSTALL_ROOT=${INSTALL_ROOT:-/bin/porker-vibe}
+ENTRY_POINTS=("vibe" "vibe-acp")
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+INSTALL_TEMP_DIR=""
 
-    success "Mistral Vibe installed successfully! (commands: vibe, vibe-acp)"
+function run_privileged() {
+    if [[ $(id -u) -eq 0 ]]; then
+        "$@"
+        return
+    fi
+
+    if command -v sudo &> /dev/null; then
+        sudo "$@"
+    else
+        error "Root privileges are required to run: $*"
+        error "Please rerun this script with sudo or as root."
+        exit 1
+    fi
+}
+
+function install_vibe() {
+    info "Installing mistral-vibe into ${INSTALL_ROOT}..."
+
+    INSTALL_TEMP_DIR=$(mktemp -d)
+    trap '[[ -n "${INSTALL_TEMP_DIR}" ]] && rm -rf "${INSTALL_TEMP_DIR}"' EXIT
+
+    uv run pip install --prefix "${INSTALL_TEMP_DIR}" "${REPO_ROOT}"
+
+    run_privileged rm -rf "${INSTALL_ROOT}" 2>/dev/null || true
+    run_privileged mkdir -p "${INSTALL_ROOT}"
+    run_privileged cp -R "${INSTALL_TEMP_DIR}/." "${INSTALL_ROOT}/"
+
+    for entry in "${ENTRY_POINTS[@]}"; do
+        local target="${INSTALL_ROOT}/bin/${entry}"
+        if [[ -f "${target}" ]]; then
+            run_privileged ln -sf "${target}" "/bin/${entry}"
+        fi
+    done
+
+    success "Mistral Vibe installed successfully in ${INSTALL_ROOT} (commands: /bin/vibe, /bin/vibe-acp)"
 }
 
 function main() {

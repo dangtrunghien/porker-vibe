@@ -15,6 +15,7 @@ from typing import Optional, Dict, Any, List, Tuple
 import json
 
 from vibe.collaborative.collaborative_agent import CollaborativeAgent
+from vibe.collaborative.collaborative_router import CollaborativeRouter
 from vibe.collaborative.task_manager import TaskType, ModelRole
 from vibe.collaborative.ollama_detector import (
     should_enable_collaborative_mode,
@@ -48,6 +49,7 @@ class CollaborativeVibeIntegration:
         """
         self.config = config
         self.collaborative_agent = None
+        self.collaborative_router = None
         self.project_root = Path.cwd()
         self._collaborative_mode_enabled = False
         self._local_model_name: Optional[str] = None
@@ -73,12 +75,16 @@ class CollaborativeVibeIntegration:
             self._initialize_collaborative_agent()
     
     def _initialize_collaborative_agent(self):
-        """Initialize the collaborative agent."""
+        """Initialize the collaborative agent and router."""
         if self.collaborative_agent is None:
             self.collaborative_agent = CollaborativeAgent(self.project_root)
             
             # Configure models based on Vibe config
             self._configure_models_from_vibe_config()
+            
+        # Initialize collaborative router
+        if self.collaborative_router is None:
+            self.collaborative_router = CollaborativeRouter(self.project_root)
     
     def _configure_models_from_vibe_config(self):
         """Configure collaborative models based on Vibe settings."""
@@ -179,7 +185,12 @@ This is NOT the standard Vibe - it has been extended with a collaborative framew
 
 ### CRITICAL: You MUST use the `delegate_to_local` tool for ALL implementation tasks
 
-**When the user asks you to write code, create files, update documentation, review code, or any implementation task, you MUST:**
+**IMPORTANT: This is NOT optional. The collaborative router will automatically detect
+implementation tasks and route them appropriately. If you try to implement tasks
+directly, the system will override your response and use the local models anyway.**
+
+**When the user asks you to write code, create files, update documentation, review code, 
+or any implementation task, you MUST:**
 1. Use the `delegate_to_local` tool with the appropriate task_type
 2. The specialized model will handle the implementation
 3. You review the result and present it to the user
@@ -200,6 +211,14 @@ This is NOT the standard Vibe - it has been extended with a collaborative framew
 - `task_type: "gitignore"` → DOCS model - .gitignore updates
 - `task_type: "cleanup"` → DOCS model - Project organization
 
+**Automatic Routing and Safety Features:**
+
+The collaborative router includes automatic features:
+1. **OOM Error Handling**: If local models run out of memory, tasks automatically fall back to Devstral
+2. **Multi-Instance Safety**: File-based locking prevents multiple Vibe instances from overwhelming the system
+3. **Periodic Retry**: Failed tasks are automatically retried with exponential backoff
+4. **Memory Pressure Detection**: System monitors for memory issues and adjusts routing accordingly
+
 **Example workflows:**
 
 User: "Create a function to validate emails"
@@ -215,7 +234,14 @@ You:
 2. The REVIEW model analyzes for security, bugs, best practices
 3. Present the review findings to user
 
+**IMPORTANT SAFETY NOTES:**
+- The system will automatically detect and handle OOM errors
+- Multiple Vibe instances can run safely without overwhelming the system
+- Tasks will be completed even if local models fail, by falling back to Devstral
+- You should NEVER implement tasks directly - always use the delegate_to_local tool
+
 REMEMBER: Do NOT write code directly. ALWAYS use the `delegate_to_local` tool for implementation tasks.
+The collaborative router will enforce this automatically.
 """
 
     def is_collaborative_mode_enabled(self) -> bool:
@@ -238,15 +264,17 @@ REMEMBER: Do NOT write code directly. ALWAYS use the `delegate_to_local` tool fo
             'plan', 'architecture', 'design', 'strategy',
             'implement', 'code', 'write', 'create', 'build',
             'document', 'docs', 'documentation',
-            'review', 'analyze', 'check', 'audit'
+            'review', 'analyze', 'check', 'audit',
+            'refactor', 'improve', 'optimize',
+            'test', 'testing', 'unit test'
         ]
         
         prompt_lower = prompt.lower()
         return any(keyword in prompt_lower for keyword in collaborative_keywords)
     
     def route_prompt_collaboratively(self, prompt: str, messages: List[LLMMessage]) -> Dict[str, Any]:
-        """Route a prompt through the collaborative framework."""
-        if not self.collaborative_agent:
+        """Route a prompt through the collaborative framework with automatic routing and safety features."""
+        if not self.collaborative_agent or not self.collaborative_router:
             return {"use_collaborative": False, "message": "Collaborative mode not initialized"}
             
         # Analyze the prompt to determine task type
@@ -255,31 +283,102 @@ REMEMBER: Do NOT write code directly. ALWAYS use the `delegate_to_local` tool fo
         if task_type is None:
             return {"use_collaborative": False, "message": "Prompt doesn't match collaborative patterns"}
             
-        # Add the task to the collaborative framework
-        task_id = self.collaborative_agent.add_custom_task(
+        # Create a routing task with the collaborative router
+        routing_task_id = self.collaborative_router.create_routing_task(
+            prompt=prompt,
             task_type=task_type,
-            description=task_description,
             priority=self._determine_priority_from_prompt(prompt)
         )
         
-        # Execute the task immediately
+        # Route the task through the router (handles OOM, locking, retries automatically)
+        routing_result = self.collaborative_router.route_task(routing_task_id)
+        
+        if routing_result['success']:
+            # Also add to collaborative agent for tracking
+            agent_task_id = self.collaborative_agent.add_custom_task(
+                task_type=task_type,
+                description=task_description,
+                priority=self._determine_priority_from_prompt(prompt)
+            )
+            
+            return {
+                "use_collaborative": True,
+                "task_id": agent_task_id,
+                "routing_task_id": routing_task_id,
+                "result": routing_result['result'],
+                "model_used": routing_result['model_used'],
+                "fallback_used": routing_result.get('fallback', False),
+                "project_status": self.collaborative_agent.get_project_status()
+            }
+        else:
+            # Handle routing failure (OOM, system busy, etc.)
+            error = routing_result.get('error', 'Unknown routing error')
+            oom_detected = routing_result.get('oom_detected', False)
+            
+            if oom_detected:
+                # Fallback to Devstral automatically
+                fallback_result = self._handle_oom_fallback(prompt, task_type, task_description)
+                return fallback_result
+            elif 'retry_after' in routing_result:
+                # System busy, suggest retry
+                return {
+                    "use_collaborative": True,
+                    "task_id": routing_task_id,
+                    "status": "system_busy",
+                    "message": f"System busy: {error}",
+                    "retry_after": routing_result['retry_after']
+                }
+            else:
+                return {
+                    "use_collaborative": True,
+                    "task_id": routing_task_id,
+                    "status": "failed",
+                    "message": f"Routing failed: {error}"
+                }
+    
+    def _handle_oom_fallback(self, prompt: str, task_type: TaskType, task_description: str) -> Dict[str, Any]:
+        """Handle OOM error by falling back to Devstral."""
+        # Create a task that will be executed by Devstral
+        agent_task_id = self.collaborative_agent.add_custom_task(
+            task_type=task_type,
+            description=f"[OOM FALLBACK] {task_description}",
+            priority=1  # High priority for fallback tasks
+        )
+        
+        # Execute the task immediately with Devstral
         result = self.collaborative_agent.execute_next_task()
         
         if result['status'] == 'completed':
             return {
                 "use_collaborative": True,
-                "task_id": task_id,
+                "task_id": agent_task_id,
                 "result": result['result'],
-                "model_used": self._get_model_for_task_type(task_type),
+                "model_used": "Devstral-2 (OOM Fallback)",
+                "fallback_used": True,
+                "oom_fallback": True,
                 "project_status": result['project_status']
             }
         else:
             return {
                 "use_collaborative": True,
-                "task_id": task_id,
-                "status": "queued",
-                "message": "Task added to collaborative queue"
+                "task_id": agent_task_id,
+                "status": "fallback_queued",
+                "message": "OOM fallback task added to queue"
             }
+    
+    def check_routing_task_status(self, routing_task_id: str) -> Dict[str, Any]:
+        """Check the status of a routing task."""
+        if not self.collaborative_router:
+            return {"error": "Collaborative router not initialized"}
+        
+        return self.collaborative_router.get_task_status(routing_task_id)
+    
+    def get_system_safety_status(self) -> Dict[str, Any]:
+        """Get current system safety status including memory pressure and locks."""
+        if not self.collaborative_router:
+            return {"error": "Collaborative router not initialized"}
+        
+        return self.collaborative_router.get_system_status()
     
     def _analyze_prompt_for_task(self, prompt: str, messages: List[LLMMessage]) -> Tuple[Optional[TaskType], str]:
         """Analyze a prompt to determine the appropriate task type."""

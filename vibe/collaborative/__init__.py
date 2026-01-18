@@ -30,6 +30,7 @@ loading them all at once. Collaborative mode auto-enables when any model is set.
 """
 
 from .collaborative_agent import CollaborativeAgent
+from .collaborative_router import CollaborativeRouter
 from .task_manager import TaskManager
 from .model_coordinator import ModelCoordinator
 from .ollama_detector import (
@@ -46,6 +47,7 @@ from .ollama_manager import ensure_ollama_running, cleanup_ollama, get_ollama_ma
 
 __all__ = [
     "CollaborativeAgent",
+    "CollaborativeRouter",
     "TaskManager",
     "ModelCoordinator",
     "CollaborativeVibeIntegration",

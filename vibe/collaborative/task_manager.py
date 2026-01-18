@@ -6,8 +6,7 @@ based on task type and model capabilities.
 """
 
 from enum import Enum, auto
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import uuid
@@ -41,14 +40,10 @@ class CollaborativeTask:
     description: str
     priority: int = 3  # 1-5 scale, 1 being highest
     status: str = "pending"
-    assigned_to: Optional[ModelRole] = None
-    created_at: datetime = datetime.now()
-    updated_at: datetime = datetime.now()
-    dependencies: List[str] = None  # IDs of dependent tasks
-    
-    def __post_init__(self):
-        if self.dependencies is None:
-            self.dependencies = []
+    assigned_to: ModelRole | None = None
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    dependencies: list[str] = field(default_factory=list)  # IDs of dependent tasks
 
 
 class TaskManager:
@@ -56,9 +51,9 @@ class TaskManager:
     
     def __init__(self, project_root: Path):
         self.project_root = project_root
-        self.tasks: Dict[str, CollaborativeTask] = {}
-        self.task_queue: List[str] = []
-        self.completed_tasks: List[str] = []
+        self.tasks: dict[str, CollaborativeTask] = {}
+        self.task_queue: list[str] = []
+        self.completed_tasks: list[str] = []
         self.task_history_file = project_root / ".vibe" / "collaborative_tasks.json"
         
         # Ensure .vibe directory exists
@@ -111,8 +106,13 @@ class TaskManager:
         with open(self.task_history_file, 'w') as f:
             json.dump(task_data, f, indent=2)
     
-    def create_task(self, task_type: TaskType, description: str, 
-                   priority: int = 3, dependencies: Optional[List[str]] = None) -> str:
+    def create_task(
+        self,
+        task_type: TaskType,
+        description: str,
+        priority: int = 3,
+        dependencies: list[str] | None = None,
+    ) -> str:
         """Create a new collaborative task."""
         task_id = str(uuid.uuid4())
         
@@ -155,7 +155,7 @@ class TaskManager:
         self.completed_tasks.append(task_id)
         self._save_tasks()
     
-    def get_next_task(self) -> Optional[Tuple[str, CollaborativeTask]]:
+    def get_next_task(self) -> tuple[str, CollaborativeTask] | None:
         """Get the next available task from the queue."""
         if not self.task_queue:
             return None
@@ -166,12 +166,12 @@ class TaskManager:
         task_id = self.task_queue[0]
         return task_id, self.tasks[task_id]
     
-    def get_tasks_by_model(self, model_role: ModelRole) -> List[Tuple[str, CollaborativeTask]]:
+    def get_tasks_by_model(self, model_role: ModelRole) -> list[tuple[str, CollaborativeTask]]:
         """Get all tasks assigned to a specific model."""
         return [(tid, task) for tid, task in self.tasks.items() 
                 if task.assigned_to == model_role and task.status != "completed"]
     
-    def get_task_status(self) -> Dict[str, int]:
+    def get_task_status(self) -> dict[str, int]:
         """Get summary of task statuses."""
         status_counts = {'pending': 0, 'assigned': 0, 'completed': 0}
         
@@ -200,3 +200,13 @@ class TaskManager:
                 assigned_role = task_assignment_rules.get(task.task_type)
                 if assigned_role:
                     self.assign_task(task_id, assigned_role)
+
+    def set_task_dependencies(self, task_id: str, dependencies: list[str]):
+        """Set canonical dependencies for an existing task."""
+        if task_id not in self.tasks:
+            raise ValueError(f"Task {task_id} not found")
+
+        task = self.tasks[task_id]
+        task.dependencies = dependencies
+        task.updated_at = datetime.now()
+        self._save_tasks()

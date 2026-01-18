@@ -5,10 +5,8 @@ Handles communication and coordination between Devstral-2 and a local model via 
 Supports VIBE_LOCAL_MODEL environment variable for seamless configuration.
 """
 
-from typing import Dict, Optional, Tuple, List
 from pathlib import Path
 import json
-import subprocess
 import requests
 from datetime import datetime
 
@@ -24,7 +22,7 @@ from .ollama_detector import (
 class ModelConfig:
     """Configuration for a model endpoint."""
     
-    def __init__(self, model_name: str, endpoint: str, api_key: Optional[str] = None):
+    def __init__(self, model_name: str, endpoint: str, api_key: str | None = None):
         self.model_name = model_name
         self.endpoint = endpoint
         self.api_key = api_key
@@ -39,7 +37,7 @@ class ModelCoordinator:
     def __init__(self, project_root: Path):
         self.project_root = project_root
         self.task_manager = TaskManager(project_root)
-        self.models: Dict[ModelRole, ModelConfig] = {}
+        self.models: dict[ModelRole, ModelConfig] = {}
         self.config_file = project_root / ".vibe" / "model_config.json"
         
         # Load or create default configuration
@@ -103,12 +101,18 @@ class ModelCoordinator:
                 api_key=model_config.get('api_key')
             )
     
-    def update_model_config(self, role: ModelRole, model_name: str, endpoint: str, api_key: Optional[str] = None):
+    def update_model_config(
+        self,
+        role: ModelRole,
+        model_name: str,
+        endpoint: str,
+        api_key: str | None = None,
+    ):
         """Update configuration for a specific model role."""
         self.models[role] = ModelConfig(model_name, endpoint, api_key)
         
         # Save the updated configuration
-        config_data = {}
+        config_data: dict[str, dict[str, str | None]] = {}
         for model_role, model_config in self.models.items():
             config_data[model_role.value] = {
                 "model_name": model_config.model_name,
@@ -119,7 +123,7 @@ class ModelCoordinator:
         with open(self.config_file, 'w') as f:
             json.dump(config_data, f, indent=2)
     
-    def query_model(self, role: ModelRole, prompt: str, context: Optional[dict] = None) -> str:
+    def query_model(self, role: ModelRole, prompt: str, context: dict | None = None) -> str:
         """Query a specific model with a prompt."""
         if role not in self.models:
             raise ValueError(f"No model configured for role: {role}")
@@ -165,7 +169,7 @@ class ModelCoordinator:
     def start_collaborative_session(self, project_description: str):
         """Start a new collaborative development session."""
         # Step 1: Create planning task for Devstral-2
-        planning_task_id = self.task_manager.create_task(
+        self.task_manager.create_task(
             task_type=TaskType.PLANNING,
             description=f"Create development plan for: {project_description}",
             priority=1
@@ -175,11 +179,16 @@ class ModelCoordinator:
         self.task_manager.auto_assign_tasks()
         
         # Step 3: Get the planning task
-        task_id, planning_task = self.task_manager.get_next_task()
+        next_task = self.task_manager.get_next_task()
+        if not next_task:
+            return "No tasks available for execution."
+
+        task_id, planning_task = next_task
         
         # Step 4: Execute the planning task
         if planning_task.assigned_to == ModelRole.PLANNER:
             plan = self._execute_planning_task(planning_task.description)
+            self.task_manager.complete_task(task_id)
             
             # Step 5: Create implementation tasks based on the plan
             self._create_implementation_tasks_from_plan(plan)
@@ -219,11 +228,6 @@ Please provide the plan in JSON format with the following structure:
         
         plan_json = self.query_model(ModelRole.PLANNER, prompt)
         
-        # Mark the planning task as completed
-        task_id, _ = self.task_manager.get_next_task()
-        if task_id:
-            self.task_manager.complete_task(task_id)
-        
         return plan_json
     
     def _create_implementation_tasks_from_plan(self, plan_json: str):
@@ -231,35 +235,47 @@ Please provide the plan in JSON format with the following structure:
         try:
             plan = json.loads(plan_json)
             
+            task_name_to_id: dict[str, str] = {}
+            dependency_names_by_task: dict[str, list[str]] = {}
+
             # Create a task for each item in the plan
             for task_info in plan.get("tasks", []):
                 task_type = TaskType[task_info["type"]]
                 task_description = task_info["description"]
                 priority = task_info.get("priority", 3)
-                
-                # Find dependency task IDs
-                dependencies = []
-                for dep_name in task_info.get("dependencies", []):
-                    # This is simplified - in a real implementation, we'd need to map names to IDs
-                    dep_task = next((t for t in plan["tasks"] if t["name"] == dep_name), None)
-                    if dep_task:
-                        # This would need to be enhanced to track task IDs properly
-                        pass
-                
-                self.task_manager.create_task(
+
+                task_id = self.task_manager.create_task(
                     task_type=task_type,
                     description=task_description,
                     priority=priority,
-                    dependencies=dependencies
+                    dependencies=[]
                 )
-            
-            # Auto-assign the new tasks
+
+                task_name = task_info.get("name")
+                if task_name:
+                    task_name_to_id[task_name] = task_id
+
+                raw_dependencies = task_info.get("dependencies") or []
+                dependency_names_by_task[task_id] = [
+                    dep for dep in raw_dependencies if isinstance(dep, str)
+                ]
+
+            for task_id, dependency_names in dependency_names_by_task.items():
+                resolved_dependencies = [
+                    task_name_to_id[name]
+                    for name in dependency_names
+                    if name in task_name_to_id
+                ]
+                if resolved_dependencies:
+                    self.task_manager.set_task_dependencies(task_id, resolved_dependencies)
+
+            # Auto-assign the new tasks after dependencies are wired up
             self.task_manager.auto_assign_tasks()
             
         except json.JSONDecodeError as e:
             print(f"Error parsing plan JSON: {e}")
     
-    def execute_next_task(self) -> Tuple[Optional[str], Optional[str]]:
+    def execute_next_task(self) -> tuple[str | None, str | None]:
         """Execute the next available task in the queue."""
         task_result = self.task_manager.get_next_task()
         
@@ -328,7 +344,7 @@ Priority: {task.priority}
         """Check if Ollama is available and return status."""
         return check_ollama_availability()
 
-    def get_local_model_name(self) -> Optional[str]:
+    def get_local_model_name(self) -> str | None:
         """Get the configured local model name from VIBE_LOCAL_MODEL."""
         return get_local_model_from_env()
 
@@ -347,7 +363,7 @@ Priority: {task.priority}
                 ollama_endpoint
             )
 
-    def get_implementer_model_info(self) -> Dict:
+    def get_implementer_model_info(self) -> dict[str, object]:
         """Get information about the implementer model configuration."""
         implementer = self.models.get(ModelRole.IMPLEMENTER)
         if not implementer:
