@@ -240,7 +240,7 @@ pip install -e .
 pip install .
 ```
 
-### Using uv (Recommended)
+### Using uv (Recommended for Arch users)
 
 ```bash
 # Install uv (if not installed)
