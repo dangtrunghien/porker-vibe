@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Vibe Collaborative Framework extends Mistral Vibe to support sophisticated dual-model collaboration. By leveraging specialized models for specific tasks, we achieve higher quality code generation, better architecture, and more robust documentation.
+The Porker-Vibe Collaborative Framework extends Mistral Vibe to support sophisticated dual-model collaboration. By leveraging specialized models for specific tasks, we achieve higher quality code generation, better architecture, and more robust documentation.
 
 **Core Collaboration Pair:**
 - **Devstral-2 (Planning & Architecture):** Handles high-level strategy, system design, code review, and user interaction.
