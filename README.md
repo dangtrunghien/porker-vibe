@@ -2,6 +2,8 @@
 
 A forked version of Mistral Vibe that integrates Devstral-2 with a local model via Ollama for collaborative coding.
 
+*Please report issues on this Github and not the main mistralai/mistral-vibe repo.*
+
 ## Features
 
 - **Fully Local Mode**: Run entirely on your PC without Mistral API (set VIBE_PLANNING_MODEL)
