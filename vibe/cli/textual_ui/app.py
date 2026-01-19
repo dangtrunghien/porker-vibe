@@ -89,6 +89,11 @@ MIN_SPLIT_PARTS = 2
 MIN_RALPH_PARTS = 3
 MAX_PERCENTAGE = 100
 
+# Performance constants
+STREAM_SCROLL_THROTTLE = (
+    0.05  # Seconds between scroll updates during streaming (20 FPS)
+)
+
 
 class VibeApp(App):  # noqa: PLR0904
     ENABLE_COMMAND_PALETTE = False
@@ -170,9 +175,9 @@ class VibeApp(App):  # noqa: PLR0904
             0,
             20,
         )  # Virtual scrolling range
-        self._message_widgets: list[
-            Widget
-        ] = []  # Track message widgets for virtualization
+        self._message_widgets: list[Widget] = []  # Track message widgets
+        self._auto_scroll = True
+        self._last_stream_scroll_time = 0.0
         self._ui_update_batch: list[Callable[[], None]] = []  # Batch UI updates
         self._batch_update_scheduled = False
 
@@ -1690,7 +1695,13 @@ class VibeApp(App):  # noqa: PLR0904
         self, message: StreamingMessageBase.StreamingContentAppended
     ) -> None:
         if self._auto_scroll:
-            self.call_after_refresh(self._scroll_to_bottom)
+            import time
+
+            now = time.time()
+            # Throttle scrolling to reduce layout churn
+            if now - self._last_stream_scroll_time > STREAM_SCROLL_THROTTLE:
+                self._last_stream_scroll_time = now
+                self.call_after_refresh(self._scroll_to_bottom)
 
     def on_scroll(self, event: VerticalScroll.Scrolled) -> None:
         """Handle scroll events to track manual vs auto scroll."""

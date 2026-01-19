@@ -53,6 +53,7 @@ class TodoWidget(Static):
         self.collaborative_integration = collaborative_integration
         self.collapsed = collapsed
         self.add_class("todo-widget")
+        self._last_state: str = ""
 
     def compose(self) -> ComposeResult:
         with Vertical(id="todo-container"):
@@ -96,69 +97,147 @@ class TodoWidget(Static):
         except Exception:
             return []
 
-    async def _render_file_todos(self) -> bool:
-        """Render todos from markdown file. Returns True if any were rendered."""
-        all_todos = self._parse_todos_from_file()
-        if not all_todos:
-            return False
+    def _get_file_todo_data(self) -> list[tuple[str, TodoStatus]]:
+        """Get todo data from markdown file."""
+        return self._parse_todos_from_file()
 
-        for content_text, status in all_todos:
-            icon = self._get_todo_status_icon(status)
-            text = content_text
-
-            status_class = "todo-pending"
-            if status == TodoStatus.COMPLETED:
-                status_class = "todo-completed"
-            elif status == TodoStatus.IN_PROGRESS:
-                status_class = "todo-in-progress"
-
-            await self._todo_list.mount(
-                NoMarkupStatic(f"{icon} {text}", classes=f"todo-task {status_class}")
-            )
-
-        return True
-
-    async def _render_plan_todos(self, add_separator: bool) -> bool:
-        """Render plan todos from PlanManager. Returns True if rendered."""
+    def _get_plan_todo_data(self) -> list[tuple[str, str, str]]:
+        """Get hierarchical plan data: (type, name, status_class)."""
         if not self.plan_manager or not self.plan_manager.current_plan:
-            return False
+            return []
 
+        data = []
         plan = self.plan_manager.current_plan
-        if not plan.epics:
-            return False
-
-        if add_separator:
-            await self._todo_list.mount(NoMarkupStatic("---", classes="todo-separator"))
-
         for epic in plan.epics:
-            status_icon = self._get_status_icon(epic.status)
-            status_class = self._get_status_class(epic.status)
-            await self._todo_list.mount(
-                NoMarkupStatic(
-                    f"{status_icon} {epic.name}", classes=f"todo-epic {status_class}"
-                )
-            )
-
+            data.append(("epic", epic.name, self._get_status_class(epic.status)))
             for task in epic.tasks:
-                status_icon = self._get_status_icon(task.status)
-                status_class = self._get_status_class(task.status)
-                await self._todo_list.mount(
-                    NoMarkupStatic(
-                        f"  {status_icon} {task.name}",
-                        classes=f"todo-task {status_class}",
-                    )
-                )
-
+                data.append(("task", task.name, self._get_status_class(task.status)))
                 for subtask in task.subtasks:
-                    status_icon = self._get_status_icon(subtask.status)
-                    status_class = self._get_status_class(subtask.status)
-                    await self._todo_list.mount(
-                        NoMarkupStatic(
-                            f"    {status_icon} {subtask.name}",
-                            classes=f"todo-subtask {status_class}",
+                    data.append((
+                        "subtask",
+                        subtask.name,
+                        self._get_status_class(subtask.status),
+                    ))
+        return data
+
+    def _get_collaborative_todo_data(self) -> list[tuple[str, str]]:
+        """Get collaborative task data: (description, status_class)."""
+        if (
+            not self.collaborative_integration
+            or not self.collaborative_integration.collaborative_agent
+        ):
+            return []
+
+        tasks = self.collaborative_integration.collaborative_agent.task_manager.tasks
+        return [
+            (t.description or "", self._get_status_class(t.status))
+            for t in tasks.values()
+        ]
+
+    async def update_todos(self) -> None:
+        """Update the todo display efficiently."""
+        try:
+            # 1. Gather all data first (no DOM touches)
+            file_todos = self._get_file_todo_data()
+            plan_todos = self._get_plan_todo_data()
+            collab_todos = self._get_collaborative_todo_data()
+
+            # 2. State check to prevent redundant updates and flashing
+            current_state = str((file_todos, plan_todos, collab_todos))
+            if current_state == self._last_state:
+                return
+            self._last_state = current_state
+
+            # 3. Batch the UI update
+            def do_update() -> None:
+                self._todo_list.remove_children()
+
+                has_content = False
+
+                # Render file todos
+                if file_todos:
+                    has_content = True
+                    for text, status in file_todos:
+                        icon = self._get_todo_status_icon(status)
+                        status_class = self._get_status_class(status)
+                        self._todo_list.mount(
+                            NoMarkupStatic(
+                                f"{icon} {text}", classes=f"todo-task {status_class}"
+                            )
                         )
+
+                # Render plan todos
+                if plan_todos:
+                    if has_content:
+                        self._todo_list.mount(
+                            NoMarkupStatic("---", classes="todo-separator")
+                        )
+                    has_content = True
+                    for item_type, name, status_class in plan_todos:
+                        # Map type to icon/indent
+                        prefix = ""
+                        # Re-calculate icon based on status string for plan items
+                        icon = "○"
+                        if "completed" in status_class:
+                            icon = "✓"
+                        elif "progress" in status_class:
+                            icon = "▶"
+
+                        if item_type == "epic":
+                            classes = f"todo-epic {status_class}"
+                        elif item_type == "task":
+                            prefix = "  "
+                            classes = f"todo-task {status_class}"
+                        else:  # subtask
+                            prefix = "    "
+                            classes = f"todo-subtask {status_class}"
+
+                        self._todo_list.mount(
+                            NoMarkupStatic(f"{prefix}{icon} {name}", classes=classes)
+                        )
+
+                # Render collaborative todos
+                if collab_todos:
+                    if has_content:
+                        self._todo_list.mount(
+                            NoMarkupStatic("---", classes="todo-separator")
+                        )
+                    has_content = True
+                    for desc, status_class in collab_todos:
+                        self._todo_list.mount(
+                            NoMarkupStatic(
+                                f"○ {desc}", classes=f"todo-task {status_class}"
+                            )
+                        )
+
+                if not has_content:
+                    self._todo_list.mount(
+                        NoMarkupStatic("○ No active tasks", classes="todo-empty")
                     )
-        return True
+
+            # Textual's App has batch_update, but Static/Widget doesn't directly.
+            # However, batch_update is accessible via self.app.
+            with self.app.batch_update():
+                do_update()
+
+            self.display = True
+        except Exception as e:
+            # Error logging remains same...
+            self._log_error(e)
+            raise
+
+    def _log_error(self, e: Exception) -> None:
+        error_log_path = Path.home() / ".vibe" / "error.log"
+        try:
+            error_log_path.parent.mkdir(parents=True, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(error_log_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{'=' * 80}\n")
+                f.write(f"[{timestamp}] Error in TodoWidget.update_todos()\n")
+                f.write(traceback.format_exc())
+                f.write(f"\n{'=' * 80}\n")
+        except Exception:
+            pass
 
     def _get_status_class(self, status: ItemStatus | TodoStatus | TaskStatus) -> str:
         """Get the CSS class for a status."""
@@ -169,80 +248,6 @@ class TodoWidget(Static):
         if "in_progress" in status_str or "progress" in status_str:
             return "todo-in-progress"
         return "todo-pending"
-
-    async def _render_collaborative_todos(self, add_separator: bool) -> bool:
-        """Render collaborative todos. Returns True if rendered."""
-        if (
-            not self.collaborative_integration
-            or not self.collaborative_integration.collaborative_agent
-        ):
-            return False
-
-        tasks = self.collaborative_integration.collaborative_agent.task_manager.tasks
-        if not tasks:
-            return False
-
-        if add_separator:
-            await self._todo_list.mount(NoMarkupStatic("---", classes="todo-separator"))
-
-        for task in tasks.values():
-            status_icon = self._get_collab_status_icon(task.status)
-            desc = task.description if task.description else ""
-
-            status_class = "todo-pending"
-            if task.status == TaskStatus.COMPLETED:
-                status_class = "todo-completed"
-            elif task.status == TaskStatus.IN_PROGRESS:
-                status_class = "todo-in-progress"
-
-            await self._todo_list.mount(
-                NoMarkupStatic(
-                    f"{status_icon} {desc}", classes=f"todo-task {status_class}"
-                )
-            )
-        return True
-
-    async def update_todos(self) -> None:
-        """Update the todo display by reading from the markdown file."""
-        error_log_path = Path.home() / ".vibe" / "error.log"
-
-        try:
-            has_content = False
-            await self._todo_list.remove_children()
-
-            # 1. Parse todos from markdown file
-            has_content = await self._render_file_todos()
-
-            # 2. Check core PlanManager
-            if await self._render_plan_todos(has_content):
-                has_content = True
-
-            # 3. Check Collaborative TaskManager
-            if await self._render_collaborative_todos(has_content):
-                has_content = True
-
-            if not has_content:
-                await self._todo_list.mount(
-                    NoMarkupStatic("○ No active tasks", classes="todo-empty")
-                )
-
-            self.display = True
-        except Exception as e:
-            try:
-                error_log_path.parent.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                with open(error_log_path, "a", encoding="utf-8") as f:
-                    f.write(f"\n{'=' * 80}\n")
-                    f.write(f"[{timestamp}] Error in TodoWidget.update_todos()\n")
-                    f.write(f"{'=' * 80}\n")
-                    f.write(f"Error Type: {type(e).__name__}\n")
-                    f.write(f"Error Message: {e!s}\n")
-                    f.write("\nTraceback:\n")
-                    f.write(traceback.format_exc())
-                    f.write(f"\n{'=' * 80}\n")
-            except Exception:
-                pass
-            raise
 
     def _get_todo_status_icon(self, status: TodoStatus) -> str:
         match status:
