@@ -43,8 +43,9 @@ class LineAnimationState:
 
 class WelcomeBanner(Static):
     FLASH_COLOR = "#FFFFFF"
-    TARGET_COLORS = ("#FFD800", "#FFAF00", "#FF8205", "#FA500F", "#E10500")
-    BORDER_TARGET_COLOR = "#b05800"
+    # Gemini-like blue gradient
+    TARGET_COLORS = ("#E8F0FE", "#D2E3FC", "#8AB4F8", "#4285F4", "#1A73E8")
+    BORDER_TARGET_COLOR = "#1A73E8"
 
     LINE_ANIMATION_DURATION_MS = 200
     LINE_STAGGER_MS = 280
@@ -93,7 +94,7 @@ class WelcomeBanner(Static):
 
     def _initialize_static_line_suffixes(self) -> None:
         self._static_line1_suffix = (
-            f"{self.LOGO_TEXT_GAP}[b]Mistral Vibe v{__version__}[/]"
+            f"{self.LOGO_TEXT_GAP}[b]Vibe Fork v{__version__}[/]"
         )
         self._static_line2_suffix = (
             f"{self.LOGO_TEXT_GAP}[dim]{self.config.active_model}[/]"

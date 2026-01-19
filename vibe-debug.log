@@ -1,0 +1,4 @@
+2026-01-18 17:07:32,752 WARNING Could not load tasks: 'assigned'
+2026-01-18 17:07:32,753 WARNING Could not load tasks: 'assigned'
+2026-01-18 17:07:32,766 INFO Loading VibeApp from: /home/rowen/github-branches/vibe/vibe/cli/textual_ui/app.py
+2026-01-18 17:07:34,041 INFO Loaded 6 messages from previous session
