@@ -4,6 +4,7 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
+from textual.message import Message
 from textual.widgets import Markdown, Static
 from textual.widgets._markdown import MarkdownStream
 
@@ -61,6 +62,9 @@ class UserMessage(Static):
 
 
 class StreamingMessageBase(Static):
+    class StreamingContentAppended(Message):
+        """Message sent when content is appended to a streaming message."""
+
     def __init__(self, content: str) -> None:
         super().__init__()
         self._content = content
@@ -87,6 +91,7 @@ class StreamingMessageBase(Static):
         if self._should_write_content():
             stream = self._ensure_stream()
             await stream.write(content)
+            self.post_message(self.StreamingContentAppended())
 
     async def write_initial_content(self) -> None:
         if self._content and self._should_write_content():

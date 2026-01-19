@@ -1679,8 +1679,15 @@ class VibeApp(App):  # noqa: PLR0904
             if not is_tool_message:
                 self.call_after_refresh(self._scroll_to_bottom)
 
-        if was_at_bottom:
+        if was_at_bottom or self._auto_scroll:
+            self.call_after_refresh(self._scroll_to_bottom)
             self.call_after_refresh(self._anchor_if_scrollable)
+
+    def on_streaming_message_base_streaming_content_appended(
+        self, message: StreamingMessageBase.StreamingContentAppended
+    ) -> None:
+        if self._auto_scroll:
+            self._scroll_to_bottom()
 
     def _is_scrolled_to_bottom(self, scroll_view: Vertical) -> bool:
         try:
