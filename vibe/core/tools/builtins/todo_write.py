@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import ClassVar, final
+from enum import StrEnum
+from typing import ClassVar, Self, final
 
 import aiofiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from vibe.core.tools.base import (
     BaseTool,
@@ -16,10 +17,33 @@ from vibe.core.tools.ui import ToolCallDisplay, ToolResultDisplay, ToolUIData
 from vibe.core.types import ToolCallEvent, ToolResultEvent
 
 
+class TodoStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+
+
 class TodoWriteArgs(BaseModel):
-    content: str = Field(
-        description="Full content of the todos.md file in markdown format."
+    content: str | None = Field(
+        default=None,
+        description="Full content of the todos.md file in markdown format. Provide EITHER this OR task/status.",
     )
+    task: str | None = Field(
+        default=None,
+        description="The task description to update. Required if content is None.",
+    )
+    status: TodoStatus | None = Field(
+        default=None,
+        description="The new status for the task. Required if content is None.",
+    )
+
+    @model_validator(mode="after")
+    def check_args(self) -> Self:
+        if self.content is None and (self.task is None or self.status is None):
+            raise ValueError(
+                "Must provide either 'content' OR both 'task' and 'status'"
+            )
+        return self
 
 
 class TodoWriteResult(BaseModel):
@@ -59,7 +83,15 @@ class TodoWrite(
         if not isinstance(event.args, TodoWriteArgs):
             return ToolCallDisplay(summary="Invalid arguments")
 
-        return ToolCallDisplay(summary="Updating todo list", content=event.args.content)
+        if event.args.content:
+            return ToolCallDisplay(
+                summary="Updating todo list", content=event.args.content
+            )
+        else:
+            return ToolCallDisplay(
+                summary=f"Updating todo: {event.args.task} -> {event.args.status}",
+                content=f"Task: {event.args.task}\nStatus: {event.args.status}",
+            )
 
     @classmethod
     def get_result_display(cls, event: ToolResultEvent) -> ToolResultDisplay:
@@ -77,13 +109,33 @@ class TodoWrite(
 
         try:
             todo_path.parent.mkdir(parents=True, exist_ok=True)
-            content_bytes = len(args.content.encode("utf-8"))
+
+            if args.content is not None:
+                # Full rewrite mode
+                final_content = args.content
+            else:
+                # Partial update mode
+                if not todo_path.exists():
+                    raise ToolError(f"Todo file not found at {todo_path}")
+
+                async with aiofiles.open(todo_path, encoding="utf-8") as f:
+                    current_content = await f.read()
+
+                if args.task and args.status:
+                    final_content = self._update_task_status(
+                        current_content, args.task, args.status
+                    )
+                else:
+                    # Should be caught by validator, but safe fallback
+                    final_content = current_content
+
+            content_bytes = len(final_content.encode("utf-8"))
 
             async with aiofiles.open(todo_path, mode="w", encoding="utf-8") as f:
-                await f.write(args.content)
+                await f.write(final_content)
 
             # Plan sync hook: update dev/PLAN.md checkboxes based on todo status
-            self._sync_to_plan_md(args.content)
+            self._sync_to_plan_md(final_content)
 
             return TodoWriteResult(
                 path=str(todo_path),
@@ -92,6 +144,56 @@ class TodoWrite(
             )
         except Exception as e:
             raise ToolError(f"Error writing todo file {todo_path}: {e}") from e
+
+    def _update_task_status(
+        self, content: str, task_name: str, status: TodoStatus
+    ) -> str:
+        """Update status of a specific task in content."""
+        import re
+
+        lines = content.splitlines()
+        updated_lines = []
+        task_found = False
+
+        # Status char map
+        status_char = " "
+        if status == TodoStatus.IN_PROGRESS:
+            status_char = "/"
+        elif status == TodoStatus.COMPLETED:
+            status_char = "x"
+
+        # Regex to match todo items
+        # Matches: - [ ] Task Name
+        pattern = re.compile(r"^(\s*-\s*\[)([\sxyXY/])(\]\s*)(.+?)(?:\s*<!--.*-->)?$")
+
+        normalized_target = task_name.strip().lower().replace("*", "")
+
+        for line in lines:
+            match = pattern.match(line)
+            if match and not task_found:
+                prefix_start = match.group(1)
+                _current_status = match.group(2)
+                prefix_end = match.group(3)
+                item_text = match.group(4)
+
+                # Check for match
+                normalized_item = item_text.strip().lower().replace("*", "")
+
+                # Simple containment check for robustness
+                if (
+                    normalized_target in normalized_item
+                    or normalized_item in normalized_target
+                ):
+                    # Found it! Update status
+                    updated_lines.append(
+                        f"{prefix_start}{status_char}{prefix_end}{item_text}"
+                    )
+                    task_found = True
+                    continue
+
+            updated_lines.append(line)
+
+        return "\n".join(updated_lines) + "\n"
 
     def _sync_to_plan_md(self, todos_content: str) -> None:
         """Sync completed todos to dev/PLAN.md checkboxes.

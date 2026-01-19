@@ -320,7 +320,7 @@ class Agent:
                         todo_instruction = (
                             f"The current todo list contains a pending task: {pending_todo}. "
                             "Please perform this task. If it requires tools, use them. "
-                            "Once completed, update the todo list status to [x] using `todo_write`. "
+                            f"Once completed, use `todo_write` to update the status to completed (pass task={pending_todo!r} and status='completed'). "
                             "IMPORTANT: Function in an autonomous loop until ALL todos are finished."
                         )
 
