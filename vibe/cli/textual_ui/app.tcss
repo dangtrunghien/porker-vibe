@@ -3,9 +3,15 @@ Screen {
     layers: base overlay;
 }
 
-#screen-body {
+#app-container {
     width: 100%;
     height: 100%;
+    layout: vertical;
+}
+
+#screen-body {
+    width: 100%;
+    height: 1fr; /* Takes remaining height above input-panel */
     layout: horizontal;
 }
 
@@ -39,15 +45,9 @@ Screen {
     overflow-y: auto;
 }
 
-#main-container {
-    width: 1fr; /* Takes remaining width */
-    height: 100%;
-    layout: vertical;
-}
-
 #chat {
-    height: 1fr; /* Takes remaining height in main-container */
-    width: 100%;
+    width: 1fr; /* Takes remaining width next to Todo list */
+    height: 100%;
     background: $background;
     padding: 0 1;
     overflow-y: scroll;
@@ -494,7 +494,7 @@ StatusMessage Horizontal {
     height: auto; color: $primary;
 }
 
-.diff-prefix {
+.diff-context {
     height: auto; color: $text-muted;
 }
 
