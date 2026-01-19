@@ -1,30 +1,51 @@
 Screen {
     background: $background;
+    layers: base overlay;
+    layout: vertical;
+}
+
+#history-container {
+    height: 1fr;
+    width: 100%;
 }
 
 #chat {
-    height: 1fr;
+    height: 100%;
     width: 100%;
     background: $background;
+    padding: 0 1;
+    overflow-y: scroll;
+}
+
+#input-panel {
+    height: auto;
+    width: 100%;
+    background: $background;
+    layout: vertical;
+    border-top: solid $primary;
+}
+
+#messages {
+    width: 100%;
+    height: auto;
+    layout: vertical;
+}
+
+.todo-widget {
+    layer: overlay;
+    offset: 60% 60%; 
+    width: 45;
+    height: auto;
+    max-height: 15;
+    background: $surface;
+    border: double $primary;
     padding: 0;
+    margin: 0;
 }
 
-#loading-area {
-    height: auto;
-    width: 100%;
-    background: $background;
-    padding: 1 0 0 0;
-    layout: horizontal;
-    align: left middle;
+.todo-widget.-collapsed {
+    display: none;
 }
-
-#loading-area-content {
-    width: 1fr;
-    height: auto;
-    align: left middle;
-}
-
-
 
 #bottom-app-container {
     height: auto;
@@ -47,15 +68,6 @@ Screen {
     background: transparent;
 }
 
-#messages {
-    layout: stream;
-    width: 100%;
-    height: auto;
-    text-align: left;
-    margin-top: 1;
-    margin-bottom: 0;
-}
-
 #input-container {
     height: auto;
     width: 100%;
@@ -73,24 +85,23 @@ Screen {
 #input-box {
     height: auto;
     width: 100%;
-    background: $background;
-    border-top: solid $foreground-muted;
-    border-bottom: solid $foreground-muted;
-    padding: 0 1;
+    background: $surface;
+    border-top: solid $primary;
+    padding: 1 2;
 
     &.border-warning {
         border-top: solid $warning;
-        border-bottom: solid $warning;
+        background: $warning 5%;
     }
 
     &.border-safe {
         border-top: solid $success;
-        border-bottom: solid $success;
+        background: $success 5%;
     }
 
     &.border-error {
         border-top: solid $error;
-        border-bottom: solid $error;
+        background: $error 5%;
     }
 }
 
@@ -109,7 +120,7 @@ Screen {
 #input {
     width: 1fr;
     height: auto;
-    max-height: 16;
+    max-height: 6;
     background: transparent;
     color: $text;
     border: none;
@@ -131,10 +142,12 @@ Markdown MarkdownFence {
 
 .user-message {
     margin-top: 1;
-    padding: 1 0;
+    margin-bottom: 1;
+    padding: 1 2;
     width: 100%;
     height: auto;
-    background: $surface;
+    background: $surface 20%;
+    border-left: solid $primary;
 
     &:first-child {
         margin-top: 0;
@@ -143,9 +156,11 @@ Markdown MarkdownFence {
     &.pending {
         .user-message-prompt,
         .user-message-content {
-            opacity: 0.7;
+            opacity: 0.6;
             text-style: italic;
         }
+        border-left: solid $foreground 30%;
+        opacity: 0.7;
     }
 }
 
@@ -170,8 +185,10 @@ Markdown MarkdownFence {
 
 .assistant-message {
     margin-top: 1;
+    margin-bottom: 2;
     width: 100%;
     height: auto;
+    padding: 0 0 0 2;
 }
 
 .assistant-message-container {
@@ -207,11 +224,15 @@ Markdown MarkdownFence {
     margin-top: 1;
     width: 100%;
     height: auto;
+    padding-left: 2;
 }
 
 .reasoning-message-wrapper {
     width: 100%;
     height: auto;
+    background: $surface 20%;
+    padding: 1 2;
+    border-left: solid $foreground 30%;
 }
 
 .reasoning-message-header {
@@ -303,14 +324,16 @@ Markdown MarkdownFence {
     width: 100%;
     height: auto;
     margin: 0;
-    padding: 0;
+    padding: 1 2;
+    background: $error 5%;
+    border-left: solid $error;
 }
 
 .error-border {
     width: auto;
     height: 100%;
-    padding: 0 1 0 2;
-    color: $foreground-muted;
+    padding: 0 1 0 0;
+    color: $error;
 }
 
 .error-content {
@@ -332,14 +355,16 @@ Markdown MarkdownFence {
     width: 100%;
     height: auto;
     margin: 0;
-    padding: 0;
+    padding: 1 2;
+    background: $warning 5%;
+    border-left: solid $warning;
 }
 
 .warning-border {
     width: auto;
     height: 100%;
-    padding: 0 1 0 2;
-    color: $foreground-muted;
+    padding: 0 1 0 0;
+    color: $warning;
 }
 
 .warning-content {
@@ -393,13 +418,15 @@ Markdown MarkdownFence {
     margin-top: 1;
     width: 100%;
     height: auto;
+    padding-left: 2;
 }
 
 .bash-output-container {
     width: 100%;
     height: auto;
     padding: 1 2;
-    background: $surface;
+    background: $surface 20%;
+    border-left: solid $accent;
 }
 
 .bash-cwd-line,
@@ -496,7 +523,10 @@ StatusMessage {
 .tool-call {
     width: 100%;
     height: auto;
-    margin-top: 1;
+    margin: 1 0;
+    padding: 1 2;
+    background: $surface 20%;
+    border-left: solid $accent;
 }
 
 .tool-result {
@@ -593,12 +623,10 @@ StatusMessage {
     color: $primary;
 }
 
-.diff-context {
+.diff-prefix {
     height: auto;
     color: $text-muted;
 }
-
-
 
 .loading-widget {
     width: 100%;
@@ -642,12 +670,13 @@ StatusMessage {
 WelcomeBanner {
     width: 100%;
     height: auto;
-    border: round $surface;
+    border: solid $primary;
+    background: $surface;
     border-title-align: center;
     text-align: center;
     content-align: center middle;
-    padding: 2 0;
-    margin: 1 0 0 0;
+    padding: 2 4;
+    margin: 0 0 2 0;
     color: $foreground;
 
     .muted {
@@ -861,4 +890,80 @@ ContextProgress {
     padding: 0;
     margin: 0;
     color: $foreground;
+}
+
+.todo-widget {
+    width: 100%;
+    height: auto;
+    max-height: 8;
+    background: $surface 20%;
+    border: solid $primary;
+    padding: 0;
+    margin: 0; /* Adjusted for full width and no external margin */
+    align: left bottom;
+}
+
+#todo-header {
+    width: 100%;
+    height: auto;
+    color: $primary;
+    text-style: bold;
+    background: $primary 10%;
+    padding: 0 1;
+    border-bottom: solid $primary;
+}
+
+#todo-list {
+    width: 100%;
+    height: auto;
+    max-height: 10;
+    padding: 0 1;
+    overflow-y: auto;
+    scrollbar-size-vertical: 0;
+}
+
+.todo-goal {
+    color: $accent;
+    text-style: bold;
+    margin-bottom: 1;
+    padding: 0 0 1 0;
+    border-bottom: solid $foreground-muted;
+}
+
+.todo-epic {
+    color: $primary;
+    text-style: bold;
+    margin-top: 1;
+}
+
+.todo-task {
+    color: $text;
+    padding: 0;
+}
+
+.todo-more {
+    color: $text-muted;
+    text-style: italic;
+    padding: 0;
+    text-align: center;
+}
+
+.todo-subtask {
+    color: $text-muted;
+    padding-left: 4;
+}
+
+.todo-separator {
+    width: 100%;
+    height: 1;
+    color: $foreground-muted;
+    text-align: center;
+    margin: 1 0;
+}
+
+.todo-empty {
+    color: $text-muted;
+    text-style: italic;
+    padding: 1 0;
+    text-align: center;
 }

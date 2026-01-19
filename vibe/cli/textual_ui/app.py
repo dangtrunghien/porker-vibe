@@ -9,6 +9,7 @@ import subprocess
 import time
 
 from typing import Any, ClassVar, assert_never, List, Dict
+from collections.abc import Callable
 
 import json # Added import
 
@@ -17,7 +18,7 @@ from pydantic import BaseModel
 from textual.app import App, ComposeResult
 
 from textual.binding import Binding, BindingType
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, VerticalScroll, Vertical
 from textual.events import AppBlur, AppFocus, MouseUp
 from textual.widget import Widget
 from textual.widgets import Static
@@ -51,6 +52,7 @@ from vibe.cli.textual_ui.widgets.messages import (
 from vibe.cli.textual_ui.widgets.mode_indicator import ModeIndicator
 from vibe.cli.textual_ui.widgets.no_markup_static import NoMarkupStatic
 from vibe.cli.textual_ui.widgets.path_display import PathDisplay
+from vibe.cli.textual_ui.widgets.todo import TodoWidget
 from vibe.cli.textual_ui.widgets.tools import ToolCallMessage, ToolResultMessage
 from vibe.cli.textual_ui.widgets.welcome import WelcomeBanner
 from vibe.cli.update_notifier import (
@@ -68,6 +70,7 @@ from vibe.core.config import VibeConfig
 from vibe.core.modes import AgentMode, next_mode
 from vibe.core.paths.config_paths import HISTORY_FILE
 from vibe.core.plan_manager import PlanManager
+from vibe.core.todo_manager import TodoManager
 from vibe.core.tools.base import BaseToolConfig, ToolPermission
 from vibe.core.types import ApprovalResponse, LLMMessage, Role
 from vibe.core.utils import (
@@ -95,6 +98,7 @@ class VibeApp(App):  # noqa: PLR0904
         Binding("ctrl+d", "force_quit", "Quit", show=False, priority=True),
         Binding("escape", "interrupt", "Interrupt", show=False, priority=True),
         Binding("ctrl+o", "toggle_tool", "Toggle Tool", show=False),
+        Binding("ctrl+t", "toggle_todo", "Toggle Todo", show=False),
 
         Binding("shift+tab", "cycle_mode", "Cycle Mode", show=False, priority=True),
         Binding("shift+up", "scroll_chat_up", "Scroll Up", show=False, priority=True),
@@ -140,8 +144,10 @@ class VibeApp(App):  # noqa: PLR0904
 
         self.history_file = HISTORY_FILE.path
         self._plan_manager = PlanManager(config.effective_workdir)
+        self._todo_manager = TodoManager(config.effective_workdir)
 
         self._tools_collapsed = True
+        self._todos_collapsed = False
 
         self._current_streaming_message: AssistantMessage | None = None
         self._current_streaming_reasoning: ReasoningMessage | None = None
@@ -166,35 +172,46 @@ class VibeApp(App):  # noqa: PLR0904
         self._ui_update_batch: list[Callable[[], None]] = []  # Batch UI updates
         self._batch_update_scheduled = False
 
+
     @property
     def config(self) -> VibeConfig:
         return self.agent.config if self.agent else self._config
 
     def compose(self) -> ComposeResult:
-        with VerticalScroll(id="chat"):
-            yield WelcomeBanner(self.config)
-            yield Static(id="messages")
+        # 1. History container (takes remaining space)
+        with Vertical(id="history-container"):
+            with VerticalScroll(id="chat"):
+                if not self._loaded_messages:
+                    yield WelcomeBanner(self.config)
+                yield Vertical(id="messages")
+                with Horizontal(id="loading-area"):
+                    yield Static(id="loading-area-content")
+                    yield ModeIndicator(mode=self._current_agent_mode)
+            
+        # Todo list floats over the history area
+        yield TodoWidget(
+            self._plan_manager,
+            self._todo_manager,
+            collaborative_integration=self._collaborative_integration,
+            collapsed=self._todos_collapsed,
+        )
 
-        with Horizontal(id="loading-area"):
-            yield Static(id="loading-area-content")
-            yield ModeIndicator(mode=self._current_agent_mode)
+        # 2. Input panel (anchored at the bottom)
+        with Vertical(id="input-panel"):
+            with Static(id="bottom-app-container"):
+                yield ChatInputContainer(
+                    history_file=self.history_file,
+                    command_registry=self.commands,
+                    id="input-container",
+                    safety=self._current_agent_mode.safety,
+                )
 
-
-
-        with Static(id="bottom-app-container"):
-            yield ChatInputContainer(
-                history_file=self.history_file,
-                command_registry=self.commands,
-                id="input-container",
-                safety=self._current_agent_mode.safety,
-            )
-
-        with Horizontal(id="bottom-bar"):
-            yield PathDisplay(
-                self.config.displayed_workdir or self.config.effective_workdir
-            )
-            yield NoMarkupStatic(id="spacer")
-            yield ContextProgress()
+            with Horizontal(id="bottom-bar"):
+                yield PathDisplay(
+                    self.config.displayed_workdir or self.config.effective_workdir
+                )
+                yield NoMarkupStatic(id="spacer")
+                yield ContextProgress()
 
     def _batch_ui_update(self, update_func: Callable[[], None]) -> None:
         """Add UI update to batch for performance optimization."""
@@ -220,16 +237,27 @@ class VibeApp(App):  # noqa: PLR0904
         # For now, we'll keep a simple approach
         pass
 
+    def on_resize(self) -> None:
+        # Dynamically position the TodoWidget at bottom-right of history area
+        try:
+            todo = self.query_one(TodoWidget)
+            history = self.query_one("#history-container")
+            
+            # Position it at the bottom right of history area
+            x = history.size.width - todo.size.width - 2
+            y = history.size.height - todo.size.height - 1
+            
+            todo.offset = (max(0, x), max(0, y))
+        except Exception:
+            pass
+
     async def on_mount(self) -> None:
         if self._terminal_theme:
             self.register_theme(self._terminal_theme)
-
-        if self.config.textual_theme == TERMINAL_THEME_NAME:
-            if self._terminal_theme:
-                self.theme = TERMINAL_THEME_NAME
-        else:
-            self.theme = self.config.textual_theme
-
+        
+        # FORCE TERMINAL THEME (Blue)
+        self.theme = TERMINAL_THEME_NAME
+        
         self.event_handler = EventHandler(
             mount_callback=self._mount_and_scroll,
             scroll_callback=self._scroll_to_bottom_deferred,
@@ -259,6 +287,8 @@ class VibeApp(App):  # noqa: PLR0904
             self.call_after_refresh(self._process_initial_prompt)
         else:
             self._ensure_agent_init_task()
+        
+        self.call_after_refresh(self.on_resize)
 
     def _process_initial_prompt(self) -> None:
         if self._initial_prompt:
@@ -267,7 +297,8 @@ class VibeApp(App):  # noqa: PLR0904
             )
 
     async def on_chat_input_container_submitted(
-        self, event: ChatInputContainer.Submitted
+        self,
+        event: ChatInputContainer.Submitted,
     ) -> None:
         value = event.value.strip()
         if not value:
@@ -289,7 +320,8 @@ class VibeApp(App):  # noqa: PLR0904
         await self._handle_user_message(value)
 
     async def on_approval_app_approval_granted(
-        self, message: ApprovalApp.ApprovalGranted
+        self,
+        message: ApprovalApp.ApprovalGranted,
     ) -> None:
         if self._pending_approval and not self._pending_approval.done():
             self._pending_approval.set_result((ApprovalResponse.YES, None))
@@ -297,7 +329,8 @@ class VibeApp(App):  # noqa: PLR0904
         await self._switch_to_input_app()
 
     async def on_approval_app_approval_granted_always_tool(
-        self, message: ApprovalApp.ApprovalGrantedAlwaysTool
+        self,
+        message: ApprovalApp.ApprovalGrantedAlwaysTool,
     ) -> None:
         self._set_tool_permission_always(
             message.tool_name, save_permanently=message.save_permanently
@@ -309,7 +342,8 @@ class VibeApp(App):  # noqa: PLR0904
         await self._switch_to_input_app()
 
     async def on_approval_app_approval_rejected(
-        self, message: ApprovalApp.ApprovalRejected
+        self,
+        message: ApprovalApp.ApprovalRejected,
     ) -> None:
         if self._pending_approval and not self._pending_approval.done():
             feedback = str(
@@ -338,7 +372,8 @@ class VibeApp(App):  # noqa: PLR0904
                 self.theme = message.value
 
     async def on_config_app_config_closed(
-        self, message: ConfigApp.ConfigClosed
+        self,
+        message: ConfigApp.ConfigClosed,
     ) -> None:
         if message.changes:
             self._save_config_changes(message.changes)
@@ -351,7 +386,8 @@ class VibeApp(App):  # noqa: PLR0904
         await self._switch_to_input_app()
 
     async def on_compact_message_completed(
-        self, message: CompactMessage.Completed
+        self,
+        message: CompactMessage.Completed,
     ) -> None:
         messages_area = self.query_one("#messages")
         children = list(messages_area.children)
@@ -369,7 +405,9 @@ class VibeApp(App):  # noqa: PLR0904
                 await widget.remove()
 
     def _set_tool_permission_always(
-        self, tool_name: str, save_permanently: bool = False
+        self,
+        tool_name: str,
+        save_permanently: bool = False,
     ) -> None:
         if save_permanently:
             VibeConfig.save_updates({"tools": {tool_name: {"permission": "always"}}})
@@ -604,6 +642,7 @@ class VibeApp(App):  # noqa: PLR0904
             agent = Agent(
                 self.config,
                 plan_manager=self._plan_manager,
+                todo_manager=self._todo_manager,
                 mode=self._current_agent_mode,
                 enable_streaming=self.enable_streaming,
                 collaborative_integration=self._collaborative_integration,
@@ -722,7 +761,10 @@ class VibeApp(App):  # noqa: PLR0904
         return self._agent_init_task
 
     async def _approval_callback(
-        self, tool: str, args: BaseModel, tool_call_id: str
+        self,
+        tool: str,
+        args: BaseModel,
+        tool_call_id: str,
     ) -> tuple[ApprovalResponse, str | None]:
         self._pending_approval = asyncio.Future()
         await self._switch_to_approval_app(tool, args)
@@ -785,6 +827,11 @@ class VibeApp(App):  # noqa: PLR0904
             self._loading_widget = None
 
             await self._finalize_current_streaming_message()
+            
+            try:
+                await self.query_one(TodoWidget).update_todos()
+            except Exception:
+                pass
 
     async def _interrupt_agent(self) -> None:
         interrupting_agent_init = bool(
@@ -870,11 +917,11 @@ class VibeApp(App):  # noqa: PLR0904
             self.post_message(AssistantMessage("Invalid percentage. Please enter a number."))
 
     async def _toggle_autocompact(self) -> None:
-        self.config.autocompact_enabled = not self.config.autocompact_enabled
-        VibeConfig.save_updates({"autocompact_enabled": self.config.autocompact_enabled})
+        self.config.autocompaction_enabled = not self.config.autocompaction_enabled
+        VibeConfig.save_updates({"autocompaction_enabled": self.config.autocompaction_enabled})
         self.post_message(
             AssistantMessage(
-                f"Autocompaction is now {'ENABLED' if self.config.autocompact_enabled else 'DISABLED'}."
+                f"Autocompaction is now {'ENABLED' if self.config.autocompaction_enabled else 'DISABLED'}."
             )
         )
 
@@ -1282,7 +1329,9 @@ class VibeApp(App):  # noqa: PLR0904
         self.call_after_refresh(config_app.focus)
 
     async def _switch_to_approval_app(
-        self, tool_name: str, tool_args: BaseModel
+        self,
+        tool: str,
+        args: BaseModel,
     ) -> None:
         bottom_container = self.query_one("#bottom-app-container")
 
@@ -1296,8 +1345,8 @@ class VibeApp(App):  # noqa: PLR0904
             self._mode_indicator.display = False
 
         approval_app = ApprovalApp(
-            tool_name=tool_name,
-            tool_args=tool_args,
+            tool_name=tool,
+            tool_args=args,
             workdir=str(self.config.effective_workdir),
             config=self.config,
         )
@@ -1427,6 +1476,13 @@ class VibeApp(App):  # noqa: PLR0904
 
 
 
+    async def action_toggle_todo(self) -> None:
+        self._todos_collapsed = not self._todos_collapsed
+        try:
+            await self.query_one(TodoWidget).set_collapsed(self._todos_collapsed)
+        except Exception:
+            pass
+
     def action_cycle_mode(self) -> None:
         if self._current_bottom_app != BottomApp.Input:
             return
@@ -1486,7 +1542,7 @@ class VibeApp(App):  # noqa: PLR0904
 
     def action_scroll_chat_up(self) -> None:
         try:
-            chat = self.query_one("#chat", VerticalScroll)
+            chat = self.query_one("#chat", Vertical)
             chat.scroll_relative(y=-5, animate=False)
             self._auto_scroll = False
         except Exception:
@@ -1494,7 +1550,7 @@ class VibeApp(App):  # noqa: PLR0904
 
     def action_scroll_chat_down(self) -> None:
         try:
-            chat = self.query_one("#chat", VerticalScroll)
+            chat = self.query_one("#chat", Vertical)
             chat.scroll_relative(y=5, animate=False)
             if self._is_scrolled_to_bottom(chat):
                 self._auto_scroll = True
@@ -1588,7 +1644,7 @@ class VibeApp(App):  # noqa: PLR0904
         if was_at_bottom:
             self.call_after_refresh(self._anchor_if_scrollable)
 
-    def _is_scrolled_to_bottom(self, scroll_view: VerticalScroll) -> bool:
+    def _is_scrolled_to_bottom(self, scroll_view: Vertical) -> bool:
         try:
             threshold = 3
             return scroll_view.scroll_y >= (scroll_view.max_scroll_y - threshold)
@@ -1597,7 +1653,7 @@ class VibeApp(App):  # noqa: PLR0904
 
     def _scroll_to_bottom(self) -> None:
         try:
-            chat = self.query_one("#chat")
+            chat = self.query_one("#chat", Vertical)
             chat.scroll_end(animate=False)
         except Exception:
             pass
@@ -1609,7 +1665,7 @@ class VibeApp(App):  # noqa: PLR0904
         if not self._auto_scroll:
             return
         try:
-            chat = self.query_one("#chat", VerticalScroll)
+            chat = self.query_one("#chat", Vertical)
             if chat.max_scroll_y == 0:
                 return
             chat.anchor()

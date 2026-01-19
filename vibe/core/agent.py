@@ -29,7 +29,9 @@ from vibe.core.middleware import (
 )
 from vibe.core.modes import AgentMode
 from vibe.core.plan_manager import PlanManager
+from vibe.core.plan_document_manager import PlanDocumentManager
 from vibe.core.planning_models import PlanItem
+from vibe.core.todo_manager import TodoManager
 from vibe.core.prompts import UtilityPrompt
 from vibe.core.skills.manager import SkillManager
 from vibe.core.system_prompt import get_universal_system_prompt
@@ -95,6 +97,7 @@ class Agent:
         self,
         config: VibeConfig,
         plan_manager: PlanManager,
+        todo_manager: TodoManager,
         mode: AgentMode = AgentMode.DEFAULT,
         message_observer: Callable[[LLMMessage], None] | None = None,
         max_turns: int | None = None,
@@ -106,6 +109,8 @@ class Agent:
         """Initialize the agent with configuration and mode."""
         self.config = config
         self.plan_manager = plan_manager
+        self.todo_manager = todo_manager
+        self.plan_document_manager = PlanDocumentManager(config.effective_workdir)
         self.auto_task_tracking_middleware = AutoTaskTrackingMiddleware(plan_manager)
         self._current_plan_item_id: Optional[UUID] = None
         self._mode = mode
@@ -116,6 +121,9 @@ class Agent:
         self.tool_manager = ToolManager(lambda: self.config)
         self.skill_manager = SkillManager(lambda: self.config)
         self.format_handler = APIToolFormatHandler()
+
+        # Inject todo_manager into TodoWrite tool
+        self._inject_todo_manager_into_tool()
 
         self.backend_factory = lambda: backend or self._select_backend()
         self.backend = self.backend_factory()
@@ -186,6 +194,24 @@ class Agent:
         self._clean_message_history()
         async for event in self._conversation_loop(msg):
             yield event
+
+    def _inject_todo_manager_into_tool(self) -> None:
+        """Inject managers into tools that need them."""
+        try:
+            # Inject todo_manager into TodoWrite tool
+            todo_tool = self.tool_manager.get("TodoWrite")
+            todo_tool._todo_manager = self.todo_manager
+        except Exception:
+            # TodoWrite tool might not be available, that's okay
+            pass
+
+        try:
+            # Inject plan_document_manager into PlanSync tool
+            plan_sync_tool = self.tool_manager.get("PlanSync")
+            plan_sync_tool._plan_document_manager = self.plan_document_manager
+        except Exception:
+            # PlanSync tool might not be available, that's okay
+            pass
 
     def _setup_middleware(self) -> None:
         """Configure middleware pipeline for this conversation."""

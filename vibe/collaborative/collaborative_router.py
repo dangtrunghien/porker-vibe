@@ -26,6 +26,7 @@ logger = getLogger(__name__) # Initialized logger
 
 from vibe.collaborative.task_manager import TaskType, ModelRole, CollaborativeTask
 from vibe.collaborative.model_coordinator import ModelCoordinator
+from vibe.collaborative.ollama_detector import check_ollama_availability
 
 @dataclass
 class TaskAttempt:

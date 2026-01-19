@@ -8,6 +8,7 @@ Supports VIBE_LOCAL_MODEL environment variable for seamless configuration.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 import json
 import requests
 from datetime import datetime

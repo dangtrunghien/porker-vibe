@@ -63,6 +63,8 @@ from vibe.core.agent import Agent as VibeAgent
 from vibe.core.autocompletion.path_prompt_adapter import render_path_prompt
 from vibe.core.config import MissingAPIKeyError, VibeConfig, load_api_keys_from_env
 from vibe.core.modes import AgentMode
+from vibe.core.plan_manager import PlanManager
+from vibe.core.todo_manager import TodoManager
 from vibe.core.tools.base import BaseToolConfig, ToolPermission
 from vibe.core.types import (
     ApprovalResponse,
@@ -172,7 +174,17 @@ class VibeAcpAgent(AcpAgent):
                 "message": "You must be authenticated before creating a new session"
             }) from e
 
-        agent = VibeAgent(config=config, mode=AgentMode.DEFAULT, enable_streaming=True)
+        # Create managers
+        plan_manager = PlanManager(config.effective_workdir)
+        todo_manager = TodoManager(config.effective_workdir)
+
+        agent = VibeAgent(
+            config=config,
+            plan_manager=plan_manager,
+            todo_manager=todo_manager,
+            mode=AgentMode.DEFAULT,
+            enable_streaming=True
+        )
         # NOTE: For now, we pin session.id to agent.session_id right after init time.
         # We should just use agent.session_id everywhere, but it can still change during
         # session lifetime (e.g. agent.compact is called).

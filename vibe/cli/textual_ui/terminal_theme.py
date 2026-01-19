@@ -237,27 +237,26 @@ def _luminance(hex_color: str) -> float:
     return (0.299 * r + 0.587 * g + 0.114 * b) / 255
 
 
-def capture_terminal_theme() -> Theme | None:
+def capture_terminal_theme() -> Theme:
     colors = _query_terminal_colors()
 
-    if not colors.background or not colors.foreground:
-        return None
+    # Default colors if capture fails
+    fg = colors.foreground or "#ffffff"
+    bg = colors.background or "#1e1e1e"
 
-    is_dark = _luminance(colors.background) < _LUMINANCE_THRESHOLD
-    fg = colors.foreground
-    bg = colors.background
+    is_dark = _luminance(bg) < _LUMINANCE_THRESHOLD
 
     surface = _adjust_brightness(bg, 1.15 if is_dark else 0.95)
     panel = _blend(bg, surface)
 
     return Theme(
         name=TERMINAL_THEME_NAME,
-        primary=colors.blue or fg,
+        primary="#1a73e8", # Hardcoded blue
         secondary=colors.cyan or fg,
         warning=colors.yellow or fg,
         error=colors.red or fg,
         success=colors.green or fg,
-        accent=colors.magenta or fg,
+        accent="#1a73e8", # Hardcoded blue
         foreground=fg,
         background=bg,
         surface=surface,

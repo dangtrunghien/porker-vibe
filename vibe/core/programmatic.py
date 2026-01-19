@@ -6,6 +6,8 @@ from vibe.core.agent import Agent
 from vibe.core.config import VibeConfig
 from vibe.core.modes import AgentMode
 from vibe.core.output_formatters import create_formatter
+from vibe.core.plan_manager import PlanManager
+from vibe.core.todo_manager import TodoManager
 from vibe.core.types import AssistantEvent, LLMMessage, OutputFormat, Role
 from vibe.core.utils import ConversationLimitException, logger
 
@@ -35,8 +37,14 @@ def run_programmatic(
     """
     formatter = create_formatter(output_format)
 
+    # Create managers
+    plan_manager = PlanManager(config.effective_workdir)
+    todo_manager = TodoManager(config.effective_workdir)
+
     agent = Agent(
         config,
+        plan_manager=plan_manager,
+        todo_manager=todo_manager,
         mode=mode,
         message_observer=formatter.on_message_added,
         max_turns=max_turns,

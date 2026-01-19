@@ -6,7 +6,7 @@ from logging import getLogger # Added import
 logger = getLogger(__name__) # Initialized logger
 
 from .model_coordinator import ModelCoordinator
-from .task_manager import TaskManager, TaskType, ModelRole
+from .task_manager import TaskManager, TaskType, ModelRole, TaskStatus
 
 
 class CollaborativeAgent:

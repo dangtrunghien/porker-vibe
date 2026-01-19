@@ -140,7 +140,7 @@ LOG_DIR.path.mkdir(parents=True, exist_ok=True)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
-    handlers=[logging.FileHandler(LOG_FILE.path, "a", "utf-8")],
+    handlers=[logging.FileHandler(Path("/home/rowen/.gemini/tmp/a4f49239e269257ec60de2a453c0899d63bccbb5930165dac7e80bcd7fc968be/vibe-debug.log"), "a", "utf-8")],
 )
 
 logger = logging.getLogger("vibe")

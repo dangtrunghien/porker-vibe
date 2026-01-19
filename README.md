@@ -1,16 +1,31 @@
 # Vibe Collaborative Framework
 
-A forked version of Mistral Vibe that integrates Devstral-2 with a local model via Ollama for collaborative coding.
+A forked version of Mistral Vibe that integrates Devstral-2 with local models via Ollama for collaborative coding, enhanced with intelligent planning, todo tracking, and a refined TUI.
 
 *Please report issues on this Github and not the main mistralai/mistral-vibe repo.*
 
 ## Features
 
+### Core Capabilities
 - **Fully Local Mode**: Run entirely on your PC without Mistral API (set VIBE_PLANNING_MODEL)
 - **Hybrid Mode**: Devstral for planning, local models for implementation (default)
 - **Multi-Model Collaboration**: Route tasks to specialized models automatically
 - **Automatic Ollama Management**: Vibe automatically starts Ollama if needed and stops it on exit
 - **Fallback Behavior**: Gracefully falls back to standard Vibe when Ollama isn't available
+
+### Enhanced Planning & Tracking
+- **Todo System**: Agents track multi-step tasks in real-time with `TodoWrite` tool
+- **PLAN.md Integration**: High-level project planning that guides agent work across sessions
+- **PlanSync Tool**: Agents synchronize immediate work (todos) with long-term goals (PLAN.md)
+- **Persistent State**: Todos and plans persist per-project in `.vibe/` directory
+- **Real-Time TUI Updates**: Watch agent progress with live todo status in the terminal UI
+
+### Developer Experience
+- **Enhanced TUI**: Redesigned with "complex simplicity" - sophisticated visual structure through clean patterns
+- **Error Detection**: Multi-level error detection with graceful degradation and recovery
+- **Debug Loops**: Systematic debugging with hypothesis-driven iteration
+- **Self-Verification**: Built-in quality checks and verification protocols
+- **Test-First Development**: Integrated support for TDD workflow
 
 ## Operating Modes
 
@@ -207,32 +222,148 @@ export VIBE_LOCAL_MODEL="deepseek-coder-v2:latest"
 vibe
 ```
 
+## Agent Tools & Capabilities
+
+Vibe agents have access to powerful tools for planning and execution:
+
+### TodoWrite Tool
+- Track multi-step tasks with status (pending, in_progress, completed)
+- Display real-time progress in the TUI
+- Persist todos per-project in `.vibe/todos.json`
+- Agents use this for complex tasks requiring multiple steps
+
+Example agent workflow:
+```markdown
+1. Create todos using TodoWrite
+2. Mark task as in_progress before starting work
+3. Mark completed immediately after finishing
+4. Update todos when discovering new requirements
+```
+
+### PlanSync Tool
+- Read project's PLAN.md to understand goals and architecture
+- Extract "Next Steps" from PLAN.md to create new todos
+- Keep immediate work aligned with long-term project vision
+- Sync work across sessions with persistent planning
+
+### Planning System
+- **PLAN.md**: High-level project planning document (auto-created, .gitignored)
+- **PlanManager**: Hierarchical planning (Goal → Epics → Tasks → Subtasks)
+- **TodoManager**: Session-scoped immediate task tracking
+- **Automatic Sync**: Agents check PLAN.md when todos complete
+
+### Enhanced TUI Features
+- **Live Todo Display**: See current tasks at the top of the interface
+- **Status Icons**: ✓ (completed), ▶ (in_progress), ○ (pending)
+- **Visual Hierarchy**: Color-coded borders and spacing for clarity
+- **Tool Call Tracking**: Watch agents use tools in real-time
+- **Reasoning Display**: Optional display of agent thinking process
+
 ## Workflow
 
+### Basic Workflow
 1. **Devstral-2 analyzes** requirements and creates a development plan
 2. **Tasks are distributed** to the local model for implementation
 3. **Local model writes** code, documentation, and maintains the repo
 4. **Devstral-2 reviews** and provides feedback
 5. **Iterative refinement** until completion
 
+### Enhanced Workflow with Planning
+1. **Agent reads PLAN.md** to understand project goals
+2. **Creates todos** using TodoWrite based on next steps
+3. **Marks task as in_progress** before starting work
+4. **Implements features** with systematic debugging
+5. **Marks completed** and moves to next todo
+6. **When all todos complete**, uses PlanSync to get next steps from PLAN.md
+7. **Updates PLAN.md** as project evolves
+
 ## Fallback Behavior
 
 When Ollama isn't running or VIBE_LOCAL_MODEL isn't set, Vibe continues to work normally using Devstral-2 for everything.
 
+## Project Structure
+
+```
+vibe/
+├── .vibe/                  # Project-specific state (auto-created, .gitignored)
+│   ├── todos.json          # Persistent todo tracking
+│   ├── plans/              # Structured plan data
+│   └── collaborative_router.lock  # Multi-instance safety
+├── PLAN.md                 # High-level project plan (auto-created, .gitignored)
+├── AGENTS.md               # Agent behavior guidelines (Python 3.12+ best practices)
+├── vibe/
+│   ├── core/               # Core agent logic
+│   │   ├── agent.py        # Main agent implementation
+│   │   ├── todo_manager.py # Todo tracking system
+│   │   ├── plan_manager.py # Hierarchical planning
+│   │   └── plan_document_manager.py  # PLAN.md management
+│   ├── cli/
+│   │   └── textual_ui/     # Terminal UI
+│   ├── collaborative/      # Multi-model coordination
+│   └── core/tools/builtins/
+│       ├── todo_write.py   # TodoWrite tool
+│       └── plan_sync.py    # PlanSync tool
+```
+
+## Agent Guidelines (AGENTS.md)
+
+The `AGENTS.md` file contains comprehensive guidelines for agent behavior:
+
+- **Modern Python 3.12+ practices** (match-case, walrus operator, type hints)
+- **Complex task decomposition** strategies
+- **Debug loops and iterative refinement** protocols
+- **Error detection and handling** at multiple levels
+- **Test-driven development** workflow
+- **Self-verification checklists** before task completion
+- **Planning and project management** best practices
+- **Handling uncertainty** - when to ask vs. when to decide
+
+These guidelines ensure agents handle complex, multi-file coding tasks with robust error detection and systematic debugging.
+
 ## Setup Requirements
 
-- **Python 3.12+**
+- **Python 3.12+** (required for modern syntax features)
 - **Ollama** running locally (or accessible endpoint)
 - **Mistral API key** - Only required if NOT using VIBE_PLANNING_MODEL (fully local mode)
 - **Local models** pulled in Ollama
+- **uv** package manager (recommended for Arch Linux users)
 
 ## Installation
 
-### Linux / macOS
+### Using uv (Recommended)
+
+The project uses `uv` for Python environment management (see `AGENTS.md` for rationale):
+
+```bash
+# Install uv (if not installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Clone the repository
+git clone https://github.com/your-username/vibe.git
+cd vibe
+
+# Install dependencies
+uv sync
+
+# Run Vibe
+uv run vibe
+
+# Or install in development mode
+uv pip install -e .
+```
+
+**Why uv?**
+- Faster than pip
+- Better dependency resolution
+- Avoids environment drift
+- Modern Python packaging best practices
+- Required by `AGENTS.md` guidelines
+
+### Traditional Installation (Linux / macOS)
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-repo/vibe.git
+git clone https://github.com/your-username/vibe.git
 cd vibe
 
 # Install in development mode
@@ -240,22 +371,92 @@ pip install -e .
 
 # Or install normally
 pip install .
+
+# Run Vibe
+vibe
 ```
 
-### Using uv (Recommended for Arch users)
+**Note:** If using traditional installation, agents in this fork follow `uv` conventions. Some agent-generated commands may use `uv run` syntax.
+
+## Using Planning Features
+
+### Creating a PLAN.md
+
+When starting a new project or complex feature:
 
 ```bash
-# Install uv (if not installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Run vibe and create PLAN.md
+vibe
 
-# Install Vibe
-cd /path/to/vibe
-uv venv
-uv pip install -e .
-
-# Run with uv
-uv run vibe
+# The agent will create PLAN.md with this structure:
 ```
+
+```markdown
+# Project Plan
+
+## Current Status
+Work in progress.
+
+## Architecture
+Key design decisions and patterns.
+
+## Milestones
+- [ ] Milestone 1: Description
+- [x] Milestone 2: Completed milestone
+
+## Current Blockers
+Any issues preventing progress.
+
+## Next Steps
+1. Specific actionable task
+2. Another task
+```
+
+### Working with Todos
+
+Agents automatically use todos for complex tasks:
+
+```
+User: "Implement user authentication with JWT tokens"
+
+Agent: Creates todos:
+  ○ Research JWT implementation patterns
+  ○ Create authentication middleware
+  ○ Implement login endpoint
+  ○ Implement token verification
+  ○ Add tests for auth flow
+  ○ Update documentation
+
+Agent marks first todo as in progress:
+  ▶ Researching JWT implementation patterns
+  ○ Create authentication middleware
+  ... (rest pending)
+
+Agent completes first todo:
+  ✓ Research JWT implementation patterns
+  ▶ Creating authentication middleware
+  ... (continues through list)
+```
+
+### Syncing Todos with PLAN.md
+
+When all todos are complete:
+
+```
+Agent uses PlanSync tool:
+  1. Reads PLAN.md
+  2. Extracts "Next Steps" section
+  3. Creates new todos based on next steps
+  4. Continues work aligned with project plan
+```
+
+### Best Practices
+
+1. **Keep PLAN.md updated** - Update as architecture evolves
+2. **Use todos for session work** - Track immediate multi-step tasks
+3. **Use PLAN.md for project scope** - High-level goals and milestones
+4. **Let agents sync** - Agents use PlanSync to stay aligned
+5. **Review .vibe/** - Contains persistent state (todos, plans, locks)
 
 ## Troubleshooting
 
@@ -323,6 +524,71 @@ export VIBE_REVIEW_MODEL="gkm-4.7"
 
 See [Ollama Modelfile documentation](https://github.com/ollama/ollama/blob/main/docs/modelfile.md) for more info.
 
+### Todos not showing in TUI?
+
+Check that:
+1. The agent has created todos using `TodoWrite` tool
+2. The `.vibe/` directory exists in your project
+3. The TodoWidget is not collapsed (press Ctrl+T to toggle)
+
+To verify todos exist:
+```bash
+cat .vibe/todos.json
+```
+
+### Want to see agent reasoning?
+
+The TUI shows agent thinking process (when available). Look for the collapsible reasoning sections marked with "Reasoning:" header.
+
+## FAQ
+
+**Q: Do I need a Mistral API key if I set VIBE_PLANNING_MODEL?**
+A: No! Setting `VIBE_PLANNING_MODEL` enables fully local mode - no API key needed.
+
+**Q: What's the difference between PlanManager and PLAN.md?**
+A:
+- **PlanManager**: Structured hierarchical data (Goal → Epics → Tasks → Subtasks) stored in `.vibe/plans/`
+- **PLAN.md**: Human-readable markdown document with goals, architecture, and next steps
+
+Both work together. Agents can use either depending on the task.
+
+**Q: Will todos persist across vibe sessions?**
+A: Yes! Todos are saved to `.vibe/todos.json` per-project. They persist until explicitly cleared or all marked complete.
+
+**Q: Can I manually edit PLAN.md?**
+A: Absolutely! PLAN.md is meant to be human-editable. Update it anytime and agents will read the latest version.
+
+**Q: How do agents decide when to use todos vs. direct implementation?**
+A: Agents use the `TodoWrite` tool for complex multi-step tasks (typically 3+ steps). For simple single-step tasks, they work directly.
+
+**Q: What are the .vibe/ files for?**
+A:
+- `todos.json` - Persistent todo tracking
+- `plans/` - Structured hierarchical plans
+- `collaborative_router.lock` - Multi-instance safety for collaborative mode
+- Other session/state files
+
+**Q: Can I use this without the TUI?**
+A: Yes! Run `vibe -c "your command"` for non-interactive mode. Todos still persist to `.vibe/todos.json`.
+
+**Q: How does the enhanced error detection work?**
+A: Agents follow guidelines in `AGENTS.md` for:
+- Input validation at entry points
+- Type safety with Pydantic
+- Graceful error recovery with retry logic
+- Systematic debugging with hypothesis testing
+- Compilation checks after edits
+
 ## License
 
 See the original Vibe repository for license information.
+
+## Contributing
+
+This is a personal fork with experimental features. For the official Mistral Vibe project, see: https://github.com/mistralai/mistral-vibe
+
+Contributions welcome! Please note:
+- Follow guidelines in `AGENTS.md` for code style
+- Test with both local and hybrid modes
+- Ensure backwards compatibility with standard Vibe
+- Add tests for new features

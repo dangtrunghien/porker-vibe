@@ -9,11 +9,12 @@ from uuid import UUID
 
 from vibe.core.modes import AgentMode
 from vibe.core.utils import VIBE_WARNING_TAG, VIBE_STOP_EVENT_TAG
+from vibe.core.types import Role
 
 if TYPE_CHECKING:
     from vibe.collaborative.vibe_integration import CollaborativeVibeIntegration
     from vibe.core.config import VibeConfig
-    from vibe.core.types import AgentStats, LLMMessage, Role
+    from vibe.core.types import AgentStats, LLMMessage
     from vibe.core.plan_manager import PlanManager # To interact with the plan
     from vibe.core.planning_models import ItemStatus, PlanItem # For statuses
 
@@ -68,8 +69,17 @@ class LoopDetectionMiddleware:
         self._recent_tool_calls: deque[str] = deque(maxlen=self.LOOP_WINDOW_SIZE)
         self._recent_llm_responses: deque[str] = deque(maxlen=self.LOOP_WINDOW_SIZE)
         self._consecutive_loop_detections = 0
+        self._pending_warning: str | None = None
 
     async def before_turn(self, context: ConversationContext) -> MiddlewareResult:
+        # Inject any pending loop warning from the previous turn
+        if self._pending_warning:
+            warning = self._pending_warning
+            self._pending_warning = None
+            return MiddlewareResult(
+                action=MiddlewareAction.INJECT_MESSAGE,
+                message=warning,
+            )
         return MiddlewareResult()
 
     async def after_turn(self, context: ConversationContext) -> MiddlewareResult:
@@ -118,17 +128,17 @@ class LoopDetectionMiddleware:
             self._consecutive_loop_detections += 1
             if self._consecutive_loop_detections >= self.MAX_CONSECUTIVE_LOOPS:
                 self._consecutive_loop_detections = 0  # Reset after stopping
+                self._pending_warning = None  # Clear any pending warning
                 return MiddlewareResult(
                     action=MiddlewareAction.STOP,
                     reason=f"Repeated loops detected ({loop_reason}). Agent stopped to prevent infinite execution.",
                 )
             else:
-                return MiddlewareResult(
-                    action=MiddlewareAction.INJECT_MESSAGE,
-                    message=f"<{VIBE_WARNING_TAG}>Loop detected ({loop_reason})! Consider changing your strategy or providing new input. Consecutive detections: {self._consecutive_loop_detections}/{self.MAX_CONSECUTIVE_LOOPS}</{VIBE_WARNING_TAG}>",
-                )
+                # Store the warning to be injected in the next before_turn
+                self._pending_warning = f"<{VIBE_WARNING_TAG}>Loop detected ({loop_reason})! Consider changing your strategy or providing new input. Consecutive detections: {self._consecutive_loop_detections}/{self.MAX_CONSECUTIVE_LOOPS}</{VIBE_WARNING_TAG}>"
         else:
             self._consecutive_loop_detections = 0  # Reset if no loop is detected
+            self._pending_warning = None  # Clear any pending warning
 
         return MiddlewareResult()
 
@@ -136,6 +146,7 @@ class LoopDetectionMiddleware:
         self._recent_tool_calls.clear()
         self._recent_llm_responses.clear()
         self._consecutive_loop_detections = 0
+        self._pending_warning = None
 
 
 
